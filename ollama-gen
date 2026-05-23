@@ -1,28 +1,16 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-# ollama-gen - call Ollama /api/generate with a simple CLI wrapper.
-#
-# Dependencies: curl, jq
+VERSION="0.5.0"
 
-# Resolve lib dir (works in repo, symlink install, and copy install).
-# shellcheck disable=SC2155
-SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
-SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
-if [[ -f "$SCRIPT_DIR/../lib/log.sh" ]]; then
-  LIB_DIR="$(cd -- "$SCRIPT_DIR/../lib" && pwd)"
-else
-  XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-  LIB_DIR="$XDG_DATA_HOME/my-unix-scripts/lib"
-fi
-# shellcheck source=/dev/null
-. "$LIB_DIR/log.sh"
-
-need_cmd curl
-need_cmd jq
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+log_info() { echo "INFO: $*" >&2; }
+log_warn() { echo "WARN: $*" >&2; }
+run_cmd() { "$@"; }
 
 usage() {
-  cat <<'EOF'
+  cat <<'EOF_USAGE'
 ollama-gen - query Ollama /api/generate
 
 Usage:
@@ -31,31 +19,18 @@ Usage:
 
 Options:
   -h, --help        Show help
-  -d, --debug       Debug (prints curl command to STDERR). Also via DEBUG=1 env.
+  -d, --debug       Print curl command to STDERR
   -m, --model NAME  Model name (default: $OLLAMA_MODEL or gemma3:1b)
   --url URL         Ollama base URL (default: $OLLAMA_URL or http://localhost:11434)
-  --gpu             Allow GPU offload (by default we force CPU-only num_gpu=0)
-  --list            List local models (uses `ollama list` if available; otherwise /api/tags)
-  --json            Output JSON (includes response + token counts + durations in seconds)
-  --raw             With --json, print upstream JSON exactly (no unit conversion)
+  --gpu             Allow default GPU offload; without this, num_gpu=0 is forced
+  --list            List local models
+  --json            Output normalized JSON
+  --raw             With --json, print upstream JSON exactly
 
-Env (optional):
-  OLLAMA_URL           default http://localhost:11434
-  OLLAMA_MODEL         default gemma3:1b
-  OLLAMA_KEEP_ALIVE    default 30m
-  OLLAMA_TEMP          default 0
-  OLLAMA_STREAM        default false
-  TIMEOUT_SEC          curl max time in seconds (optional)
-
-  Extra JSON options (numbers/bools, optional):
-    OLLAMA_NUM_CTX, OLLAMA_NUM_BATCH, OLLAMA_NUM_PREDICT, OLLAMA_LOW_VRAM, OLLAMA_NUM_GPU
-
-Examples:
-  ollama-gen "List 5 facts about WSL."
-  ollama-gen -m llama3.2:3b "Write a short bash script that prints date"
-  echo "Summarize this file" | ollama-gen --json | jq -r .response
-
-EOF
+Env:
+  OLLAMA_URL, OLLAMA_MODEL, OLLAMA_KEEP_ALIVE, OLLAMA_TEMP, OLLAMA_STREAM, TIMEOUT_SEC
+  OLLAMA_NUM_CTX, OLLAMA_NUM_BATCH, OLLAMA_NUM_PREDICT, OLLAMA_LOW_VRAM, OLLAMA_NUM_GPU
+EOF_USAGE
 }
 
 MODEL="${OLLAMA_MODEL:-gemma3:1b}"
@@ -64,7 +39,6 @@ KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30m}"
 TEMP="${OLLAMA_TEMP:-0}"
 STREAM="${OLLAMA_STREAM:-false}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-}"
-
 DEBUG_FLAG=0
 ALLOW_GPU=0
 DO_LIST=0
@@ -73,143 +47,78 @@ RAW_JSON=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    -d | --debug)
-      DEBUG_FLAG=1
-      shift
-      ;;
-    -m | --model)
-      MODEL="${2:-}"
-      shift 2
-      ;;
-    --url)
-      URL="${2:-}"
-      shift 2
-      ;;
-    --gpu)
-      ALLOW_GPU=1
-      shift
-      ;;
-    --list)
-      DO_LIST=1
-      shift
-      ;;
-    --json)
-      OUT_JSON=1
-      shift
-      ;;
-    --raw)
-      RAW_JSON=1
-      shift
-      ;;
+    -h|--help) usage; exit 0 ;;
+    -d|--debug) DEBUG_FLAG=1; shift ;;
+    -m|--model) MODEL="${2:-}"; shift 2 ;;
+    --url) URL="${2:-}"; shift 2 ;;
+    --gpu) ALLOW_GPU=1; shift ;;
+    --list) DO_LIST=1; shift ;;
+    --json) OUT_JSON=1; shift ;;
+    --raw) RAW_JSON=1; shift ;;
     *) break ;;
   esac
 done
+
+need_cmd curl
+need_cmd jq
 
 if [[ "$DO_LIST" == "1" ]]; then
   if command -v ollama >/dev/null 2>&1; then
     ollama list
   else
     log_warn "ollama CLI not found; falling back to /api/tags"
-    run_cmd curl -fsS "${URL}/api/tags" | jq .
+    curl -fsS "${URL}/api/tags" | jq .
   fi
   exit 0
 fi
 
-PROMPT=""
 if [[ $# -gt 0 ]]; then
   PROMPT="$*"
-else
-  if [[ -t 0 ]]; then
-    usage
-    exit 2
-  fi
+elif [[ ! -t 0 ]]; then
   PROMPT="$(cat)"
+else
+  usage >&2
+  exit 2
 fi
 
 [[ -n "$MODEL" ]] || die "Model is empty"
 [[ -n "$URL" ]] || die "URL is empty"
 
-# Build options JSON
-# Default: CPU-only unless --gpu
-num_gpu_json="0"
-if [[ "$ALLOW_GPU" == "1" ]]; then
-  if [[ -n "${OLLAMA_NUM_GPU:-}" ]]; then
-    num_gpu_json="${OLLAMA_NUM_GPU}"
-  else
-    num_gpu_json="null" # do not force any value
-  fi
-fi
-
 jq_bool() { [[ "$1" == "true" ]] && echo true || echo false; }
 
-# Start with an empty options object, then conditionally add keys.
 options="$(jq -n '{}')"
-
-# Always include temperature (as number) if parseable
 if [[ "$TEMP" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
   options="$(jq -n --argjson t "$TEMP" --argjson o "$options" '$o + {temperature: $t}')"
 fi
-
-# CPU/GPU handling
-if [[ "$num_gpu_json" != "null" ]]; then
-  if [[ "$num_gpu_json" =~ ^[0-9]+$ ]]; then
-    options="$(jq -n --argjson n "$num_gpu_json" --argjson o "$options" '$o + {num_gpu: $n}')"
-  fi
+if [[ "$ALLOW_GPU" == "0" ]]; then
+  options="$(jq -n --argjson o "$options" '$o + {num_gpu: 0}')"
+elif [[ -n "${OLLAMA_NUM_GPU:-}" && "${OLLAMA_NUM_GPU:-}" =~ ^[0-9]+$ ]]; then
+  options="$(jq -n --argjson n "$OLLAMA_NUM_GPU" --argjson o "$options" '$o + {num_gpu: $n}')"
 fi
 
-# Optional numeric/bool knobs (only add if set and valid)
 add_num() {
-  local var="$1" key="$2"
-  local val="${!var:-}"
-  [[ -n "$val" ]] || return 0
-  [[ "$val" =~ ^-?[0-9]+$ ]] || return 0
+  local var="$1" key="$2" val="${!1:-}"
+  [[ -n "$val" && "$val" =~ ^-?[0-9]+$ ]] || return 0
   options="$(jq -n --argjson v "$val" --argjson o "$options" '$o + {("'"$key"'"): $v}')"
 }
 add_bool() {
-  local var="$1" key="$2"
-  local val="${!var:-}"
-  [[ -n "$val" ]] || return 0
-  if [[ "$val" == "true" || "$val" == "false" ]]; then
-    options="$(jq -n --argjson o "$options" --argjson v "$(jq_bool "$val")" '$o + {("'"$key"'"): $v}')"
-  fi
+  local var="$1" key="$2" val="${!1:-}"
+  [[ "$val" == "true" || "$val" == "false" ]] || return 0
+  options="$(jq -n --argjson o "$options" --argjson v "$(jq_bool "$val")" '$o + {("'"$key"'"): $v}')"
 }
-
 add_num OLLAMA_NUM_CTX num_ctx
 add_num OLLAMA_NUM_BATCH num_batch
 add_num OLLAMA_NUM_PREDICT num_predict
 add_bool OLLAMA_LOW_VRAM low_vram
 
-payload="$(
-  jq -n \
-    --arg model "$MODEL" \
-    --arg prompt "$PROMPT" \
-    --arg keep "$KEEP_ALIVE" \
-    --argjson stream "$(jq_bool "$STREAM")" \
-    --argjson options "$options" \
-    '{
-    model: $model,
-    prompt: $prompt,
-    stream: $stream,
-    keep_alive: $keep,
-    options: $options
-  }'
-)"
+payload="$(jq -n --arg model "$MODEL" --arg prompt "$PROMPT" --arg keep "$KEEP_ALIVE" --argjson stream "$(jq_bool "$STREAM")" --argjson options "$options" '{model:$model,prompt:$prompt,stream:$stream,keep_alive:$keep,options:$options}')"
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-curl_args=(-fsS -H "Content-Type: application/json" -d "$payload" "${URL}/api/generate")
-if [[ -n "$TIMEOUT_SEC" ]]; then
-  curl_args=(--max-time "$TIMEOUT_SEC" "${curl_args[@]}")
-fi
-
-if [[ "$DEBUG_FLAG" == "1" || "${DEBUG:-0}" == "1" ]]; then
-  log_info "curl ${curl_args[*]}"
-fi
+curl_args=(-fsS -H 'Content-Type: application/json' -d "$payload" "${URL}/api/generate")
+if [[ -n "$TIMEOUT_SEC" ]]; then curl_args=(--max-time "$TIMEOUT_SEC" "${curl_args[@]}"); fi
+if [[ "$DEBUG_FLAG" == "1" || "${DEBUG:-0}" == "1" ]]; then log_info "curl ${curl_args[*]}"; fi
 
 run_cmd curl "${curl_args[@]}" >"$tmp"
 
@@ -218,19 +127,15 @@ if [[ "$OUT_JSON" == "1" ]]; then
     cat "$tmp"
   else
     jq '{
-      model,
-      created_at,
-      response,
-      done,
-      context,
-      prompt_eval_count,
-      eval_count,
-      load_duration_s:        (.load_duration         / 1000000000),
-      prompt_eval_duration_s: (.prompt_eval_duration  / 1000000000),
-      eval_duration_s:        (.eval_duration         / 1000000000),
-      total_duration_s:       (.total_duration        / 1000000000)
+      model, created_at, response, thinking, done, done_reason,
+      prompt_eval_count, eval_count,
+      load_duration_s:        (if .load_duration then .load_duration/1000000000 else null end),
+      prompt_eval_duration_s: (if .prompt_eval_duration then .prompt_eval_duration/1000000000 else null end),
+      eval_duration_s:        (if .eval_duration then .eval_duration/1000000000 else null end),
+      total_duration_s:       (if .total_duration then .total_duration/1000000000 else null end),
+      gen_tps:                (if .eval_duration and .eval_duration > 0 then (.eval_count / (.eval_duration/1000000000)) else null end)
     }' "$tmp"
   fi
 else
-  jq -r '.response' "$tmp"
+  jq -r '.response // empty' "$tmp"
 fi

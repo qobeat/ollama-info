@@ -1,15 +1,39 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-mkdir -p "$HOME/log"
+BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
+LOG_DIR="${LOG_DIR:-$HOME/log}"
+LOG_FILE="${OLLAMA_SERVE_LOG:-$LOG_DIR/ollama-serve.log}"
+WAIT_SEC="${WAIT_SEC:-10}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
-if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-  echo "Ollama server: already running at http://127.0.0.1:11434"
+mkdir -p "$LOG_DIR"
+
+if curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; then
+  echo "Ollama server: already running at $BASE_URL"
 else
+  command -v ollama >/dev/null 2>&1 || { echo "ERROR: ollama CLI not found" >&2; exit 2; }
   echo "Starting Ollama server..."
-  nohup ollama serve > "$HOME/log/ollama-serve.log" 2>&1 &
-  sleep 3
+  nohup ollama serve >"$LOG_FILE" 2>&1 &
+  pid="$!"
+  echo "Ollama serve PID: $pid"
+  for _ in $(seq 1 "$WAIT_SEC"); do
+    if curl -fsS --connect-timeout 2 "$BASE_URL/api/tags" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+fi
+
+if curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; then
+  echo "Ollama server: RUNNING at $BASE_URL"
+else
+  echo "ERROR: Ollama server did not become ready at $BASE_URL" >&2
+  echo "Log: $LOG_FILE" >&2
+  exit 3
 fi
 
 echo
-"$HOME/bin/ollama-status"
+if [[ -x "$SCRIPT_DIR/ollama-status" ]]; then
+  BASE_URL="$BASE_URL" "$SCRIPT_DIR/ollama-status"
+fi

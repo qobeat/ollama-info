@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Ollama performance & health check (WSL/Linux)
 set -Eeuo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 VERSION="2.7"
 
@@ -39,7 +40,7 @@ need curl
 need jq
 need timeout
 need date
-need calc_perf_ollama_table.py
+need "$SCRIPT_DIR/calc_perf_ollama_table.py"
 
 usage() {
   cat <<H
@@ -375,7 +376,7 @@ say "============================================================"
 say ">>> QUICK SUMMARY (from CSV)"
 say "============================================================"
 
-calc_perf_ollama_table.py "$CSVFILE" | tee -a "$LOGFILE"
+"$SCRIPT_DIR/calc_perf_ollama_table.py" "$CSVFILE" | tee -a "$LOGFILE"
 
 say ""
 if [[ "$RUN_CPU" == "1" ]]; then
