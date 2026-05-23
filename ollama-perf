@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# Ollama performance & health check (WSL/Linux)
+set -Eeuo pipefail
+
+VERSION="2.6"
+
+MODEL="${1:-${MODEL:-gemma3:1b}}"
+BASE_URL="${OLLAMA_URL:-http://localhost:11434}"
+
+NUM_PREDICT="${NUM_PREDICT:-256}"
+KEEP_ALIVE="${KEEP_ALIVE:-30m}"
+CONC_LIST="${CONC_LIST:-2 4}"
+THREAD_SWEEP="${THREAD_SWEEP:-auto}"
+
+TIMEOUT_SEC="${TIMEOUT_SEC:-300}"
+KILL_AFTER_SEC="${KILL_AFTER_SEC:-5}" # SIGKILL after TERM
+CONNECT_TIMEOUT_SEC="${CONNECT_TIMEOUT_SEC:-5}"
+
+FIXED_RUNS="${FIXED_RUNS:-2}"
+RUN_CPU="${RUN_CPU:-1}"   # 0 to skip CPU tests
+RUN_CONC="${RUN_CONC:-1}" # 0 to skip concurrency tests
+VERBOSE="${VERBOSE:-0}"   # 1 prints full JSON blocks
+
+PROMPT_DEFAULT="Write a detailed answer (>= 500 words) about how to benchmark LLM inference. Use numbered sections."
+PROMPT="${PROMPT:-$PROMPT_DEFAULT}"
+
+TS="$(date -Iseconds)"
+SAFE_MODEL="${MODEL//[:\/]/-}"
+OUTDIR="${OUTDIR:-$HOME/log}"
+mkdir -p "$OUTDIR"
+LOGFILE="$OUTDIR/ollama-perf-${SAFE_MODEL}-$(date +%Y%m%d-%H%M%S).out"
+CSVFILE="$OUTDIR/ollama-perf-${SAFE_MODEL}-$(date +%Y%m%d-%H%M%S).csv"
+
+need() { command -v "$1" >/dev/null 2>&1 || {
+  echo "ERROR: missing $1" >&2
+  exit 2
+}; }
+need curl
+need jq
+need timeout
+need date
+
+usage() {
+  cat <<H
+OLLAMA PERF v$VERSION
+
+Usage:
+  $0 [MODEL]
+
+Env knobs:
+  OLLAMA_URL=http://localhost:11434
+  NUM_PREDICT=256
+  KEEP_ALIVE=30m
+  CONC_LIST="2 4"
+  THREAD_SWEEP=auto|none|1,5,10
+  TIMEOUT_SEC=300
+  KILL_AFTER_SEC=5
+  CONNECT_TIMEOUT_SEC=5
+  FIXED_RUNS=2
+  RUN_CPU=1|0
+  RUN_CONC=1|0
+  VERBOSE=1|0
+
+Outputs:
+  LOGFILE=$LOGFILE
+  CSVFILE=$CSVFILE
+
+Examples:
+  TIMEOUT_SEC=600 CONC_LIST="1 2" RUN_CPU=0 $0 qwen2.5-coder:7b
+  TIMEOUT_SEC=900 RUN_CPU=1 RUN_CONC=0 $0 qwen2.5-coder:7b
+H
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+say() { printf '%s\n' "$*" | tee -a "$LOGFILE"; }
+
+emit_csv_header() {
+  printf '%s\n' \
+    "timestamp,test,model,mode,concurrency,num_predict,num_thread,num_gpu,prompt_tokens,gen_tokens,prompt_tps,gen_tps,total_ms,load_ms,error" \
+    >"$CSVFILE"
+}
+
+# Convert Ollama duration fields (nanoseconds) into ms and tokens/sec.
+summarize_response() {
+  jq -c '
+    def ms(ns): (ns/1000000);
+    def sec(ns): (ns/1000000000);
+    def tps(tokens; dur_ns): (if (dur_ns|tonumber) > 0 then (tokens / sec(dur_ns)) else null end);
+    {
+      prompt_tokens: (.prompt_eval_count // null),
+      gen_tokens: (.eval_count // null),
+      load_ms: (if (.load_duration? != null) then (ms(.load_duration)|round) else null end),
+      total_ms: (if (.total_duration? != null) then (ms(.total_duration)|round) else null end),
+      prompt_tps: (if (.prompt_eval_count? != null and .prompt_eval_duration? != null) then (tps(.prompt_eval_count; .prompt_eval_duration)) else null end),
+      gen_tps: (if (.eval_count? != null and .eval_duration? != null) then (tps(.eval_count; .eval_duration)) else null end),
+      error: null
+    }
+  '
+}
+
+emit_csv_row() {
+  local test="$1" mode="$2" conc="$3" np="$4" nthr="$5" ngpu="$6" summary_json="$7"
+  jq -r --arg ts "$TS" --arg test "$test" --arg model "$MODEL" --arg mode "$mode" \
+    --arg conc "$conc" --arg np "$np" --arg nthr "$nthr" --arg ngpu "$ngpu" '
+    [
+      $ts,$test,$model,$mode,$conc,$np,$nthr,$ngpu,
+      (.prompt_tokens // ""),
+      (.gen_tokens // ""),
+      (.prompt_tps // ""),
+      (.gen_tps // ""),
+      (.total_ms // ""),
+      (.load_ms // ""),
+      (.error // "")
+    ] | @csv
+  ' <<<"$summary_json" >>"$CSVFILE"
+}
+
+payload_generate() {
+  local prompt="$1" num_predict="$2" keep_alive="$3" options_json="$4"
+  if [[ -n "$keep_alive" ]]; then
+    jq -nc --arg m "$MODEL" --arg p "$prompt" --arg ka "$keep_alive" --argjson n "$num_predict" --argjson opt "$options_json" \
+      '{model:$m,prompt:$p,stream:false,keep_alive:$ka,options:($opt + {num_predict:$n})}'
+  else
+    jq -nc --arg m "$MODEL" --arg p "$prompt" --argjson n "$num_predict" --argjson opt "$options_json" \
+      '{model:$m,prompt:$p,stream:false,options:($opt + {num_predict:$n})}'
+  fi
+}
+
+req() {
+  local t="$1" payload="$2" errf="$3"
+  timeout -k "${KILL_AFTER_SEC}s" "$t" \
+    curl -sS --fail-with-body \
+    --connect-timeout "$CONNECT_TIMEOUT_SEC" \
+    --max-time "$t" \
+    "$BASE_URL/api/generate" \
+    -H 'Content-Type: application/json' -H 'Accept: application/json' \
+    -d "$payload" 2>"$errf"
+}
+
+print_summary_line() {
+  local test="$1" summary_json="$2"
+  local gen_tps total_ms load_ms
+  gen_tps="$(jq -r '.gen_tps // "n/a"' <<<"$summary_json")"
+  total_ms="$(jq -r '.total_ms // "n/a"' <<<"$summary_json")"
+  load_ms="$(jq -r '.load_ms // "n/a"' <<<"$summary_json")"
+  say "$test: gen_tps=$gen_tps tok/s total_ms=$total_ms load_ms=$load_ms"
+}
+
+run_and_record() {
+  local test="$1" mode="$2" conc="$3" np="$4" nthr="$5" ngpu="$6" payload="$7" quiet="${8:-0}"
+
+  local t="$TIMEOUT_SEC"
+  local errf out rc err summary
+  errf="$(mktemp)"
+  rc=0
+  out=""
+  if ! out="$(req "$t" "$payload" "$errf")"; then rc=$?; fi
+  err="$(cat "$errf" || true)"
+  rm -f "$errf"
+
+  if [[ "$rc" != "0" ]]; then
+    summary="$(jq -nc --arg e "curl_failed(exit=$rc timeout=${t}s)" '{error:$e}')" || summary='{"error":"curl_failed"}'
+    emit_csv_row "$test" "$mode" "$conc" "$np" "$nthr" "$ngpu" "$summary"
+    say "ERROR: $test ($mode) failed: exit=$rc timeout=${t}s"
+    [[ -n "$err" ]] && say "stderr: $err"
+    return 0
+  fi
+
+  if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+    summary='{"error":"non_json_response"}'
+    emit_csv_row "$test" "$mode" "$conc" "$np" "$nthr" "$ngpu" "$summary"
+    say "ERROR: $test ($mode) non-JSON response"
+    return 0
+  fi
+
+  summary="$(printf '%s' "$out" | summarize_response)" || summary='{"error":"summarize_failed"}'
+  emit_csv_row "$test" "$mode" "$conc" "$np" "$nthr" "$ngpu" "$summary"
+
+  if [[ "$quiet" == "1" ]]; then
+    print_summary_line "$test" "$summary"
+  else
+    say ""
+    say "=== $test ($mode) ==="
+    if [[ "$VERBOSE" == "1" ]]; then
+      printf '%s\n' "$summary" | jq . | tee -a "$LOGFILE" >/dev/null
+    else
+      print_summary_line "$test" "$summary"
+    fi
+  fi
+}
+
+DMON_PID=""
+cleanup() {
+  if [[ -n "${DMON_PID:-}" ]]; then
+    say ""
+    say "=== CLEANUP ==="
+    say "Stopping nvidia-smi dmon (PID $DMON_PID)..."
+    kill "$DMON_PID" >/dev/null 2>&1 || true
+  fi
+
+  local p
+  for p in $(jobs -pr 2>/dev/null || true); do
+    kill "$p" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup EXIT INT TERM
+
+emit_csv_header
+
+say "=== OLLAMA PERF v$VERSION ==="
+say "time: $TS"
+say "model: $MODEL"
+say "base_url: $BASE_URL"
+say "num_predict: $NUM_PREDICT"
+say "keep_alive: $KEEP_ALIVE"
+say "concurrency: $CONC_LIST"
+say "thread_sweep: $THREAD_SWEEP"
+say "timeout_sec: $TIMEOUT_SEC"
+say "log: $LOGFILE"
+say "csv: $CSVFILE"
+
+say ""
+say "============================================================"
+say ">>> PREFLIGHT"
+say "============================================================"
+if command -v nproc >/dev/null 2>&1; then
+  say "[CPU] logical cores: $(nproc)"
+fi
+say "[MEM]"
+free -h 2>/dev/null | tee -a "$LOGFILE" || true
+say "[OLLAMA]"
+if command -v ollama >/dev/null 2>&1; then
+  ollama --version 2>/dev/null | tee -a "$LOGFILE" || true
+fi
+
+say ""
+say "[GPU snapshot]"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used,utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+    | awk -F',' '{gsub(/^[ \t]+|[ \t]+$/,"",$0); printf("%s,  %s,  %s MiB,  %s MiB,  %s %%\n",$1,$2,$3,$4,$5)}' \
+    | tee -a "$LOGFILE" >/dev/null || true
+  nvidia-smi -L 2>/dev/null | tee -a "$LOGFILE" >/dev/null || true
+
+  say "=== Starting: nvidia-smi dmon -s pucm (every 1s) ==="
+  nvidia-smi dmon -s pucm -d 1 >>"$LOGFILE" 2>/dev/null &
+  DMON_PID="$!"
+  say "nvidia-smi dmon PID: $DMON_PID"
+fi
+
+say ""
+say "============================================================"
+say ">>> SERVER SANITY (tags)"
+say "============================================================"
+curl -sS "$BASE_URL/api/tags" | jq -r '.models[]?.name // empty' | tee -a "$LOGFILE" || true
+
+curl -sS "$BASE_URL/api/tags" | jq -r --arg m "$MODEL" '
+  .models[]?
+  | select(.name == $m or .model == $m)
+  | "selected: " + (.model // .name)
+    + " | params=" + (.details.parameter_size // "n/a")
+    + " | quant=" + (.details.quantization_level // "n/a")
+    + " | size_bytes=" + ((.size // 0)|tostring)
+' | tee -a "$LOGFILE" || true
+
+say ""
+say "============================================================"
+say ">>> SERVER SANITY (ps)"
+say "============================================================"
+curl -sS "$BASE_URL/api/ps" | jq -r '.models[]?.model // empty' | tee -a "$LOGFILE" || true
+
+say ""
+say "============================================================"
+say ">>> WARM-UP (keep_alive=$KEEP_ALIVE)"
+say "============================================================"
+warm_payload="$(payload_generate "Warm up." 8 "$KEEP_ALIVE" '{"temperature":0,"seed":42}')"
+run_and_record "warmup" "GPU" "1" "8" "" "" "$warm_payload"
+say "Warm-up done."
+
+say ""
+say "============================================================"
+say ">>> FIXED RUNS (GPU): ${NUM_PREDICT} tokens x ${FIXED_RUNS}"
+say "============================================================"
+for i in $(seq 1 "$FIXED_RUNS"); do
+  payload="$(payload_generate "$PROMPT" "$NUM_PREDICT" "" '{"temperature":0,"seed":42}')"
+  run_and_record "fixed_gpu_$i" "GPU" "1" "$NUM_PREDICT" "" "" "$payload"
+done
+
+if [[ "$RUN_CPU" == "1" ]]; then
+  say ""
+  say "============================================================"
+  say ">>> FIXED RUNS (CPU only, num_gpu=0): ${NUM_PREDICT} tokens x ${FIXED_RUNS}"
+  say "============================================================"
+  for i in $(seq 1 "$FIXED_RUNS"); do
+    payload="$(payload_generate "$PROMPT" "$NUM_PREDICT" "" '{"temperature":0,"seed":42,"num_gpu":0}')"
+    run_and_record "fixed_cpu_$i" "CPU" "1" "$NUM_PREDICT" "" "0" "$payload"
+  done
+
+  say ""
+  say "============================================================"
+  say ">>> CPU THREAD SWEEP (CPU only)"
+  say "============================================================"
+  thread_list=""
+  if [[ "$THREAD_SWEEP" == "none" ]]; then
+    thread_list=""
+  elif [[ "$THREAD_SWEEP" == "auto" ]]; then
+    cores="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
+    half="$(((cores + 1) / 2))"
+    thread_list="1 $half $cores"
+  else
+    thread_list="$(printf '%s' "$THREAD_SWEEP" | tr ',' ' ')"
+  fi
+
+  if [[ -n "$thread_list" ]]; then
+    for th in $thread_list; do
+      say "=== num_thread=$th ==="
+      payload="$(payload_generate "$PROMPT" "$NUM_PREDICT" "" '{"temperature":0,"seed":42,"num_gpu":0}' | jq --argjson th "$th" '.options.num_thread=$th')"
+      run_and_record "cpu_thr_${th}" "CPU" "1" "$NUM_PREDICT" "$th" "0" "$payload"
+    done
+  else
+    say "Thread sweep disabled."
+  fi
+else
+  say ""
+  say "CPU tests skipped (RUN_CPU=0)."
+fi
+
+if [[ "$RUN_CONC" == "1" ]]; then
+  say ""
+  say "============================================================"
+  say ">>> CONCURRENCY (GPU): $CONC_LIST (each ${NUM_PREDICT} tokens)"
+  say "============================================================"
+  for conc in $CONC_LIST; do
+    say "--- CONC=$conc --- (prints a dot every 10s while waiting)"
+    pids=()
+    for i in $(seq 1 "$conc"); do
+      payload="$(payload_generate "$PROMPT" "$NUM_PREDICT" "" '{"temperature":0,"seed":42}')"
+      (run_and_record "conc_${conc}_req${i}" "GPU" "$conc" "$NUM_PREDICT" "" "" "$payload" 1) &
+      pids+=("$!")
+    done
+
+    while :; do
+      alive=0
+      for p in "${pids[@]}"; do
+        if kill -0 "$p" 2>/dev/null; then
+          alive=1
+          break
+        fi
+      done
+      [[ "$alive" == "0" ]] && break
+      printf '.' | tee -a "$LOGFILE"
+      sleep 10
+    done
+    printf '\n' | tee -a "$LOGFILE"
+    wait "${pids[@]}" 2>/dev/null || true
+  done
+else
+  say ""
+  say "Concurrency tests skipped (RUN_CONC=0)."
+fi
+
+say ""
+say "============================================================"
+say ">>> KEEP-ALIVE CHECK"
+say "============================================================"
+payload="$(payload_generate "Keep-alive check." 64 "$KEEP_ALIVE" '{"temperature":0,"seed":42}')"
+run_and_record "keepalive" "GPU" "1" "64" "" "" "$payload"
+
+say ""
+say "============================================================"
+say ">>> QUICK SUMMARY (from CSV)"
+say "============================================================"
+# Fix: jq defs must NOT be preceded by a pipe. This avoids the "unexpected |" compile error.
+summary_json="$(tail -n +2 "$CSVFILE" | jq -Rsr '
+  [ split("\n")[] | select(length>0) | fromcsv ] as $r;
+
+  def vals($prefix):
+    [ $r[] | select(.[1] | startswith($prefix)) | (.[11] | tonumber? ) ] | map(select(. != null));
+
+  def median($a):
+    ($a|sort) as $s
+    | ($s|length) as $n
+    | if $n==0 then null
+      elif ($n%2)==1 then $s[($n/2|floor)]
+      else (($s[($n/2|floor)-1] + $s[($n/2|floor)]) / 2)
+      end;
+
+  {
+    gpu_med: (vals("fixed_gpu_") | median(.)),
+    cpu_med: (vals("fixed_cpu_") | median(.)),
+    conc_med: (vals("conc_") | median(.))
+  }
+  | .speedup = (if (.gpu_med!=null and .cpu_med!=null and .cpu_med>0) then (.gpu_med/.cpu_med) else null end)
+')"
+
+jq -r '
+  "GPU median gen_tps: " + (if .gpu_med==null then "n/a" else (.gpu_med|tostring) end) + " tok/s\n" +
+  "CPU median gen_tps: " + (if .cpu_med==null then "n/a" else (.cpu_med|tostring) end) + " tok/s\n" +
+  "CONC median gen_tps:" + (if .conc_med==null then " n/a" else (" " + (.conc_med|tostring)) end) + " tok/s\n" +
+  "GPU/CPU speedup:    " + (if .speedup==null then "n/a" else (.speedup|tostring) end) + " x"
+' <<<"$summary_json" | tee -a "$LOGFILE"
+
+say ""
+if [[ "$RUN_CPU" == "1" ]]; then
+  say "Note: if keepalive load_ms is high after CPU-only tests (num_gpu=0), that's expected: CPU runs can force a reload when switching back to GPU."
+fi
+
+say "All done. Human log: $LOGFILE"
+say "CSV summary:        $CSVFILE"
+say "Done at: $(date -Iseconds)"

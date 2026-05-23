@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pkill -f "ollama serve" 2>/dev/null || true
+pkill -f "ollama runner" 2>/dev/null || true
+
+echo "Stopped Ollama server/runner processes if they were running."

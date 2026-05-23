@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEL_DIR="${OLLAMA_MODELS:-$HOME/.ollama/models}"
+
+echo "=== Ollama server ==="
+if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+  echo "status: RUNNING"
+  echo "url:    http://127.0.0.1:11434"
+else
+  echo "status: NOT RUNNING"
+fi
+
+echo
+echo "=== Ollama version ==="
+ollama -v 2>/dev/null || true
+
+echo
+echo "=== Downloaded models ==="
+if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+  ollama list
+else
+  echo "Cannot run 'ollama list' because server is not running."
+fi
+
+echo
+echo "=== Loaded models in memory/GPU ==="
+if curl -fsS http://127.0.0.1:11434/api/ps >/dev/null 2>&1; then
+  ollama ps || true
+else
+  echo "No server response from /api/ps."
+fi
+
+echo
+echo "=== Model disk usage ==="
+echo "model_dir: $MODEL_DIR"
+if [ -d "$MODEL_DIR" ]; then
+  du -sh "$MODEL_DIR"
+  echo
+  echo "Subdirectories:"
+  du -sh "$MODEL_DIR"/* 2>/dev/null || true
+  echo
+  echo "Largest blobs:"
+  find "$MODEL_DIR/blobs" -type f -printf '%s %p\n' 2>/dev/null \
+    | sort -nr \
+    | head -10 \
+    | awk '{ size=$1; $1=""; cmd="numfmt --to=iec --suffix=B " size; cmd | getline human; close(cmd); print human $0 }'
+else
+  echo "Model directory does not exist."
+fi
+
+echo
+echo "=== GPU ==="
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi --query-gpu=name,driver_version,temperature.gpu,power.draw,memory.used,memory.total,utilization.gpu --format=csv
+  echo
+  echo "GPU processes:"
+  nvidia-smi
+else
+  echo "nvidia-smi not found."
+fi
+
+echo
+echo "=== Recent Ollama log lines ==="
+if [ -f "$HOME/log/ollama-serve.log" ]; then
+  grep -Ei "Listening|CUDA|RTX|inference compute|offloaded|loaded CUDA|error|warn|failure" "$HOME/log/ollama-serve.log" | tail -30 || true
+else
+  echo "No log file at $HOME/log/ollama-serve.log"
+fi

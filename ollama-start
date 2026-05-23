@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p "$HOME/log"
+
+if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+  echo "Ollama server: already running at http://127.0.0.1:11434"
+else
+  echo "Starting Ollama server..."
+  nohup ollama serve > "$HOME/log/ollama-serve.log" 2>&1 &
+  sleep 3
+fi
+
+echo
+"$HOME/bin/ollama-status"
