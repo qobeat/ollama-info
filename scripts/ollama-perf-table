@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ollama performance & health check (WSL/Linux)
 set -Eeuo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 VERSION="2.7"
 

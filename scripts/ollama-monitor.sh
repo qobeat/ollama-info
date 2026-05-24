@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.4.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
+VERSION="1.5.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.5.0-atomic-review-plain-summary"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -78,30 +84,21 @@ Outputs per run:
 EOF_USAGE
 }
 
-log() { printf '%s %s\n' "$(date -Is)" "$*"; }
-warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
-is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
-print_file_timestamped() {
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-      printf '%s\n' "$line"
-    else
-      printf '%s %s\n' "$(date -Is)" "$line"
-    fi
-  done <"$1"
-}
+log() { ollama_log "$*"; }
+warn() { ollama_warn_to_file "$ERRORS_FILE" "$*"; }
+need_cmd() { ollama_need_cmd "$1" || exit 2; }
+is_uint() { ollama_is_uint "$1"; }
+print_file_plain() { ollama_print_file_plain "$1"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --interval) INTERVAL="${2:-}"; shift 2 ;;
-    --duration) DURATION="${2:-}"; shift 2 ;;
-    --profile) PROFILE="${2:-}"; shift 2 ;;
-    --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
-    --run-id) RUN_ID="${2:-}"; shift 2 ;;
-    --base-url) BASE_URL="${2:-}"; shift 2 ;;
-    --snapshot-every) SNAPSHOT_EVERY="${2:-}"; SNAPSHOT_EVERY_PROVIDED=1; shift 2 ;;
+    --interval) INTERVAL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --duration) DURATION="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --profile) PROFILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --out-dir) OUT_DIR="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --run-id) RUN_ID="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --base-url) BASE_URL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --snapshot-every) SNAPSHOT_EVERY="$(ollama_require_arg_value "$1" "${2-}")"; SNAPSHOT_EVERY_PROVIDED=1; shift 2 ;;
     --zip) ZIP_ON_EXIT=1; shift ;;
     --no-zip) ZIP_ON_EXIT=0; shift ;;
     --self-test) SELF_TEST=1; shift ;;
@@ -593,7 +590,6 @@ make_terminal_summary() {
 finish() {
   [[ "$FINALIZED" == "1" ]] && return 0
   FINALIZED=1
-  log ""
   log "Stopping monitor..."
   capture_static_snapshot end || true
   capture_gpu_error_scan || true
@@ -604,11 +600,14 @@ finish() {
   generate_report || warn "report generation failed"
   make_terminal_summary || warn "terminal summary generation failed"
   make_archive || warn "archive creation failed"
-  if [[ -s "$TERMINAL_SUMMARY" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; fi
-  log "Report: $REPORT"
-  log "CSV:    $CSV"
-  if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:    $ARCHIVE_PATH"; fi
-  log "Run dir: $RUN_DIR"
+  if [[ -s "$TERMINAL_SUMMARY" ]]; then
+    print_file_plain "$TERMINAL_SUMMARY"
+  else
+    log "Report: $REPORT"
+    log "CSV:    $CSV"
+    if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:    $ARCHIVE_PATH"; fi
+    log "Run dir: $RUN_DIR"
+  fi
 }
 
 run_self_test() {
@@ -627,7 +626,6 @@ EOF_CSV
   finish
   grep -q "GPU telemetry summary" "$REPORT"
   grep -q "PCIe link warnings" "$REPORT"
-  log "Self-test OK"
 }
 
 trap 'STOP_REASON="interrupted"; finish; exit 130' INT

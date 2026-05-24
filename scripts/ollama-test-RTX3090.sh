@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.4.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
+VERSION="1.5.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.5.0-atomic-review-plain-summary"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -151,37 +157,15 @@ require_ollama_ready() {
   fi
 }
 
-log() { printf '%s %s\n' "$(date -Is)" "$*"; }
-warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
-is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
-print_file_timestamped() {
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-      printf '%s\n' "$line"
-    else
-      printf '%s %s\n' "$(date -Is)" "$line"
-    fi
-  done <"$1"
-}
-timestamp_stream() {
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-      printf '%s\n' "$line"
-    else
-      printf '%s %s\n' "$(date -Is)" "$line"
-    fi
-  done
-}
-script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
-script_display_cmd() {
-  case "$0" in
-    */*) printf '%s\n' "$0" ;;
-    *) printf '%s\n' "$(basename "$0")" ;;
-  esac
-}
+log() { ollama_log "$*"; }
+warn() { ollama_warn_to_file "$ERRORS_FILE" "$*"; }
+need_cmd() { ollama_need_cmd "$1" || exit 2; }
+is_uint() { ollama_is_uint "$1"; }
+print_file_plain() { ollama_print_file_plain "$1"; }
+timestamp_stream() { ollama_timestamp_stream; }
+script_dir() { printf '%s
+' "$SCRIPT_DIR"; }
+script_display_cmd() { ollama_display_cmd "$0"; }
 
 ORIGINAL_ARGC=$#
 NO_MODEL_ARGS=0
@@ -189,21 +173,21 @@ NO_MODEL_ARGS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) MODEL="${2:-}"; shift 2 ;;
-    --base-url) BASE_URL="${2:-}"; shift 2 ;;
-    --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
-    --run-id) RUN_ID="${2:-}"; shift 2 ;;
-    --num-ctx) NUM_CTX="${2:-}"; shift 2 ;;
-    --long-ctx) LONG_CTX="${2:-}"; shift 2 ;;
-    --num-predict) NUM_PREDICT="${2:-}"; shift 2 ;;
-    --long-num-predict) LONG_NUM_PREDICT="${2:-}"; shift 2 ;;
-    --long-prompt-words) LONG_PROMPT_WORDS="${2:-}"; shift 2 ;;
-    --temperature) TEMPERATURE="${2:-}"; shift 2 ;;
-    --timeout-sec) TIMEOUT_SEC="${2:-}"; shift 2 ;;
-    --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
-    --think) THINK="${2:-}"; shift 2 ;;
-    --prompt-prefix) PROMPT_PREFIX="${2:-}"; shift 2 ;;
-    --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
+    --model) MODEL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --base-url) BASE_URL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --out-dir) OUT_DIR="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --run-id) RUN_ID="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --num-ctx) NUM_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-ctx) LONG_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --num-predict) NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-num-predict) LONG_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-prompt-words) LONG_PROMPT_WORDS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --temperature) TEMPERATURE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --timeout-sec) TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --concurrency) CONCURRENCY="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --prompt-prefix) PROMPT_PREFIX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --server-log-lines) SERVER_LOG_LINES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
     --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
     --stress) RUN_CONC=1; [[ "$CONCURRENCY" -lt 2 ]] && CONCURRENCY=2; shift ;;
@@ -211,13 +195,13 @@ while [[ $# -gt 0 ]]; do
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;
     --no-cpu) RUN_CPU=0; shift ;;
-    --soak-minutes) SOAK_MINUTES="${2:-}"; shift 2 ;;
-    --soak-num-predict) SOAK_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --soak-minutes) SOAK_MINUTES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --soak-num-predict) SOAK_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --run-vram-pressure) RUN_VRAM_PRESSURE=1; shift ;;
     --no-vram-pressure) RUN_VRAM_PRESSURE=0; shift ;;
-    --vram-model) VRAM_MODEL="${2:-}"; shift 2 ;;
-    --vram-ctx) VRAM_CTX="${2:-}"; shift 2 ;;
-    --vram-num-predict) VRAM_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --vram-model) VRAM_MODEL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --vram-ctx) VRAM_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --vram-num-predict) VRAM_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --pull) PULL_IF_MISSING=1; shift ;;
     --no-pull) PULL_IF_MISSING=0; shift ;;
     --ensure-server) ENSURE_SERVER=1; shift ;;
@@ -261,16 +245,11 @@ OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 mkdir -p "$RUN_DIR" "$RAW_DIR" "$PAYLOAD_DIR" "$TMP_DIR"
 : >"$ERRORS_FILE"
 
-SD="$(script_dir)"
-COMMON_SCRIPT="$SD/ollama-common.sh"
-[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
-# shellcheck source=/dev/null
-source "$COMMON_SCRIPT"
+SD="$SCRIPT_DIR"
 
 need_cmd curl
 need_cmd jq
 need_cmd date
-need_cmd timeout
 
 # Preflight never starts Ollama. It reports status and prints the exact start command instead.
 ensure_server() {
@@ -696,7 +675,7 @@ run_generate() {
   log "START [$step_label/$PLANNED_TESTS] $test_name: category=$category model=$model_name mode=$mode ctx=$ctx predict=$np conc=$conc prompt_words=$prompt_words"
   start_ns="$(date +%s%N)"
   set +e
-  timeout -k 10s "$TIMEOUT_SEC" curl -sS --connect-timeout "$CONNECT_TIMEOUT_SEC" --max-time "$TIMEOUT_SEC" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$BASE_URL/api/generate" >"$http_file" 2>"$stderr_file"
+  ollama_curl_generate "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload_file" "$raw_file" "$http_file" "$stderr_file" "$BASE_URL"
   rc=$?
   set -e
   end_ns="$(date +%s%N)"
@@ -938,6 +917,6 @@ make_summary_md
 make_terminal_summary
 make_archive
 
-if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; log "CSV:     $SUMMARY_CSV"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
+if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then print_file_plain "$TERMINAL_SUMMARY"; else log "Test collector completed; artifacts are under $RUN_DIR"; fi
 ERROR_COUNT="$(awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s} NR==1{for(i=1;i<=NF;i++)h[unq($i)]=i; next} {if(unq($(h["error"]))!="")e++} END{print e+0}' "$SUMMARY_CSV")"
 if [[ "$ERROR_COUNT" -gt 0 ]]; then exit 1; fi

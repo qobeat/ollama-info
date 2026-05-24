@@ -1,4 +1,4 @@
-# Bash integration for ollama-info
+# Bash integration for ollama-info v1.5
 
 `bashrc/.bashrc` is an optional WSL2-oriented interactive Bash configuration.
 It assumes Ollama is managed by `systemd` and keeps server-side Ollama settings out of the shell.

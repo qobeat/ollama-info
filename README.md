@@ -1,4 +1,4 @@
-# ollama-info v1.4
+# ollama-info v1.5
 
 Production-oriented RTX 3090 + WSL2 + Ollama diagnostics package.
 
@@ -48,6 +48,17 @@ ollama-info/
     VERIFY-*.md
     REFLECTION-*.md
 ```
+
+### v1.5 audit artifacts
+
+The v1.5 package includes two explicit review artifacts in `changelog/`:
+
+```text
+atomic-requirements-v1.5.txt   README/changelog-derived atomic requirements and final implementation status
+plan-1.5.txt                   issue list, architecture review findings, and implementation plan
+```
+
+These files are intended to make future maintenance less ambiguous: each user-visible behavior is tracked as an atomic requirement rather than only as prose in the README.
 
 ### Production readiness by script
 
@@ -111,7 +122,7 @@ Run without the `.bashrc` wrapper:
 Core runtime:
 
 ```text
-Bash 4+
+Bash 5.2+ (tested target; uses strict mode, arrays, `[[ ]]`, process substitution, and modern Bash semantics)
 curl
 jq
 awk / sed / grep
@@ -150,7 +161,7 @@ ollama test qwen3.6 --no-conc --concurrency 1
 
 That was a conservative first-run command after a prior model-load failure and while concurrency was still enabled by default.
 
-In v1.4, the default baseline is already the safe mode:
+In v1.5, the default baseline is already the safe mode:
 
 ```text
 RUN_CONC=0
@@ -323,8 +334,8 @@ user command
   -> bash wrapper, optional
   -> ollama-test-and-monitor-RTX3090.sh
       -> preflight status/model/API checks
-      -> start ollama-monitor.sh in background
       -> capture start nvidia-smi snapshots
+      -> start ollama-monitor.sh in background
       -> run ollama-test-RTX3090.sh
       -> stop monitor
       -> capture end nvidia-smi snapshots
@@ -334,7 +345,7 @@ user command
 
 ### Default baseline tests
 
-The default v1.4 baseline runs four GPU API tests:
+The default v1.5 baseline runs four GPU API tests:
 
 | Test | Purpose |
 |---|---|
@@ -369,7 +380,7 @@ ollama test qwen3.6 --run-vram-pressure --vram-model larger-model:tag
 
 ### Why concurrency is no longer default
 
-Large Qwen-class models can occupy most of the 24 GB VRAM on an RTX 3090 at 8K context. Running a concurrency probe by default can turn a clean health baseline into a VRAM-pressure test. v1.4 separates those modes:
+Large Qwen-class models can occupy most of the 24 GB VRAM on an RTX 3090 at 8K context. Running a concurrency probe by default can turn a clean health baseline into a VRAM-pressure test. v1.5 separates those modes:
 
 ```text
 baseline = single request, stable health/performance signal
@@ -403,7 +414,7 @@ hardware/
   nvidia-compute-apps-end.csv
 monitor/
   run-*-monitor/report.md
-  run-*-monitor/samples.csv
+  run-*-monitor/gpu.csv
 test/
   run-*-test/summary.md
   run-*-test/summary.csv
@@ -422,7 +433,9 @@ A zip archive is also written under:
 
 ### Timestamped logs
 
-Operational console lines from the orchestrator, test runner, and monitor begin with ISO timestamps. This makes copied terminal output suitable for later incident review.
+Operational progress lines from the orchestrator, test runner, monitor, and downloader begin with ISO timestamps. These are collector/action lines such as preflight checks, NVIDIA snapshot capture, monitor start/stop, API request start/done, archive creation, and long-running downloader attempts.
+
+Final terminal summaries are intentionally printed without timestamp prefixes. The display contract is: timestamped collector progress first, then one plain summary block. Help text, compact discovery/status screens, and saved report/summary file content also remain human-readable without mandatory timestamp prefixes.
 
 ### NVIDIA boundary snapshots
 
@@ -578,6 +591,7 @@ For custom GGUF imports, recreate the model from the Modelfile.
 
 | Version | Main change |
 |---|---|
+| v1.5 | Atomic requirements audit, Bash 5.2+ target, shared helper cleanup, clear option-value validation, optional `timeout` fallback, plain final summaries after timestamped collector progress. |
 | v1.4 | Production README, safe default baseline, `--stress` shorthand, model command UX cleanup. |
 | v1.3 | Timestamped operational logs, fixed false API-error classification, NVIDIA start/end snapshots, `scripts/` + `changelog/` layout. |
 | v1.2 | Sudo-aware systemd start/stop helpers, improved `.bashrc`, simplified one-argument downloader. |

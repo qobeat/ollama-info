@@ -1,3 +1,16 @@
+# v1.5.0 - atomic requirements audit and Bash 5.2+ cleanup
+
+- Added `changelog/atomic-requirements-v1.5.txt` with README/changelog-derived atomic requirements and final implementation status.
+- Added `changelog/plan-1.5.txt` with implementation review findings, architecture issues, usability issues, and fix plan.
+- Updated package target from generic Bash 4+ to Bash 5.2+.
+- Centralized common Bash helpers for timestamps, warnings, integer checks, command checks, script path display, argument-value validation, and timestamped stream logging and plain summary printing in `ollama-common.sh`.
+- Hardened option parsing so missing values such as `--model` or `--method` produce clear errors instead of shell `shift` failures.
+- Kept `timeout` as optional by falling back to curl `--max-time` when GNU timeout is unavailable.
+- Cleaned downloader duplicated code paths, timestamped downloader operational logs, and preserved one-source-argument aria2 workflow.
+- Fixed README artifact naming drift: monitor CSV is `gpu.csv`, not `samples.csv`.
+- Changed final terminal summary display so progress/collector lines remain timestamped, while final summary blocks are plain and untimestamped.
+- Removed `realpath` from script-directory resolution; scripts now use Bash/core shell path resolution and keep `realpath` only as an optional downloader local-path convenience.
+
 # v1.4.0 - production README and safe default baseline
 
 - Reworked README into a production-grade project document covering functionality, architecture, script status, artifact layout, operations, and troubleshooting.

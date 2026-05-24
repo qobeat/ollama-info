@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.4.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
+VERSION="1.5.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.5.0-atomic-review-plain-summary"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -146,38 +152,15 @@ require_ollama_ready() {
   fi
 }
 
-log() { printf '%s %s\n' "$(date -Is)" "$*"; }
-warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
-is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
-print_file_timestamped() {
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-      printf '%s\n' "$line"
-    else
-      printf '%s %s\n' "$(date -Is)" "$line"
-    fi
-  done <"$1"
-}
-script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
-script_display_cmd() {
-  case "$0" in
-    */*) printf '%s\n' "$0" ;;
-    *) printf '%s\n' "$(basename "$0")" ;;
-  esac
-}
-
-timestamp_stream() {
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
-      printf '%s\n' "$line"
-    else
-      printf '%s %s\n' "$(date -Is)" "$line"
-    fi
-  done
-}
+log() { ollama_log "$*"; }
+warn() { ollama_warn_to_file "$ERRORS_FILE" "$*"; }
+need_cmd() { ollama_need_cmd "$1" || exit 2; }
+is_uint() { ollama_is_uint "$1"; }
+print_file_plain() { ollama_print_file_plain "$1"; }
+script_dir() { printf '%s
+' "$SCRIPT_DIR"; }
+script_display_cmd() { ollama_display_cmd "$0"; }
+timestamp_stream() { ollama_timestamp_stream; }
 
 ORIGINAL_ARGC=$#
 NO_MODEL_ARGS=0
@@ -185,20 +168,20 @@ NO_MODEL_ARGS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model) MODEL="${2:-}"; shift 2 ;;
-    --base-url) BASE_URL="${2:-}"; shift 2 ;;
-    --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
-    --run-id) RUN_ID="${2:-}"; shift 2 ;;
-    --interval) INTERVAL="${2:-}"; shift 2 ;;
-    --monitor-profile) MONITOR_PROFILE="${2:-}"; shift 2 ;;
-    --num-ctx) NUM_CTX="${2:-}"; shift 2 ;;
-    --long-ctx) LONG_CTX="${2:-}"; shift 2 ;;
-    --num-predict) NUM_PREDICT="${2:-}"; shift 2 ;;
-    --long-num-predict) LONG_NUM_PREDICT="${2:-}"; shift 2 ;;
-    --long-prompt-words) LONG_PROMPT_WORDS="${2:-}"; shift 2 ;;
-    --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
-    --think) THINK="${2:-}"; shift 2 ;;
-    --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
+    --model) MODEL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --base-url) BASE_URL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --out-dir) OUT_DIR="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --run-id) RUN_ID="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --interval) INTERVAL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --monitor-profile) MONITOR_PROFILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --num-ctx) NUM_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-ctx) LONG_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --num-predict) NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-num-predict) LONG_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --long-prompt-words) LONG_PROMPT_WORDS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --concurrency) CONCURRENCY="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --server-log-lines) SERVER_LOG_LINES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
     --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
     --stress) RUN_CONC=1; [[ "$CONCURRENCY" -lt 2 ]] && CONCURRENCY=2; shift ;;
@@ -206,16 +189,16 @@ while [[ $# -gt 0 ]]; do
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;
     --no-cpu) RUN_CPU=0; shift ;;
-    --soak-minutes) SOAK_MINUTES="${2:-}"; shift 2 ;;
-    --soak-num-predict) SOAK_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --soak-minutes) SOAK_MINUTES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --soak-num-predict) SOAK_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --run-vram-pressure) RUN_VRAM_PRESSURE=1; shift ;;
     --no-vram-pressure) RUN_VRAM_PRESSURE=0; shift ;;
-    --vram-model) VRAM_MODEL="${2:-}"; shift 2 ;;
-    --vram-ctx) VRAM_CTX="${2:-}"; shift 2 ;;
-    --vram-num-predict) VRAM_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --vram-model) VRAM_MODEL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --vram-ctx) VRAM_CTX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --vram-num-predict) VRAM_NUM_PREDICT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --pull) PULL_IF_MISSING=1; shift ;;
     --no-pull) PULL_IF_MISSING=0; shift ;;
-    --timeout-sec) TIMEOUT_SEC="${2:-}"; shift 2 ;;
+    --timeout-sec) TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --terminal-summary) PRINT_TERMINAL_SUMMARY=1; shift ;;
     --no-terminal-summary) PRINT_TERMINAL_SUMMARY=0; shift ;;
     --zip) ZIP_ON_EXIT=1; shift ;;
@@ -243,14 +226,9 @@ ERRORS_FILE="$RUN_DIR/errors.log"
 mkdir -p "$RUN_DIR" "$MONITOR_ROOT" "$TEST_ROOT" "$HARDWARE_ROOT" "$TMP_DIR"
 : >"$ERRORS_FILE"
 
-SD="$(script_dir)"
-COMMON_SCRIPT="$SD/ollama-common.sh"
-[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
-# shellcheck source=/dev/null
-source "$COMMON_SCRIPT"
+SD="$SCRIPT_DIR"
 MONITOR_SCRIPT="$SD/ollama-monitor.sh"
 TEST_SCRIPT="$SD/ollama-test-RTX3090.sh"
-START_SCRIPT="$SD/ollama-start"
 [[ -x "$MONITOR_SCRIPT" ]] || { echo "ERROR: missing executable $MONITOR_SCRIPT" >&2; exit 2; }
 [[ -x "$TEST_SCRIPT" ]] || { echo "ERROR: missing executable $TEST_SCRIPT" >&2; exit 2; }
 need_cmd curl
@@ -503,5 +481,5 @@ set -e
 
 cleanup
 
-if [[ "$PRINT_TERMINAL_SUMMARY" == "1" && -s "$TERMINAL_SUMMARY" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
+if [[ "$PRINT_TERMINAL_SUMMARY" == "1" && -s "$TERMINAL_SUMMARY" ]]; then print_file_plain "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
 exit "$TEST_RC"

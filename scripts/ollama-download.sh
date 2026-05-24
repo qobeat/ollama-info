@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.4.0"
-SCRIPT_SIGNATURE="OLLAMA_DOWNLOAD_SCRIPT_SIGNATURE=v1.2.0-one-arg-source-aria2-systemd"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
+VERSION="1.5.0"
+SCRIPT_SIGNATURE="OLLAMA_DOWNLOAD_SCRIPT_SIGNATURE=v1.5.0-one-arg-source-aria2-bash52-ux-cleanup"
 
 METHOD="${METHOD:-auto}"
 REPO_ID="${REPO_ID:-}"
@@ -133,11 +139,11 @@ Exit codes:
 EOF_USAGE
 }
 
-log() { printf '%s\n' "$*"; }
-warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { printf 'ERROR: missing command: %s\n' "$1" >&2; exit 3; }; }
-is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
-script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
+log() { ollama_log "$*"; }
+warn() { ollama_warn_to_file "$ERRORS_FILE" "$*"; }
+need_cmd() { ollama_need_cmd "$1" || exit 3; }
+is_uint() { ollama_is_uint "$1"; }
+script_dir() { printf '%s\n' "$SCRIPT_DIR"; }
 
 cleanup() {
   [[ -n "$ARIA2_INPUT_FILE" && -f "$ARIA2_INPUT_FILE" ]] && rm -f -- "$ARIA2_INPUT_FILE"
@@ -366,35 +372,35 @@ ensure_ollama_server() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --repo) REPO_ID="${2:-}"; shift 2 ;;
-      --file) GGUF_FILE="${2:-}"; shift 2 ;;
-      --revision|--rev) REVISION="${2:-}"; shift 2 ;;
-      --url) URL="${2:-}"; SOURCE_ARG_MODE=1; shift 2 ;;
-      --local-file) LOCAL_FILE="${2:-}"; SOURCE_ARG_MODE=1; shift 2 ;;
-      --method) METHOD="${2:-}"; shift 2 ;;
-      --out-dir) DOWNLOAD_DIR="${2:-}"; shift 2 ;;
-      --base-out-dir) BASE_OUT_DIR="${2:-}"; shift 2 ;;
-      --retry-wait) RETRY_WAIT="${2:-}"; shift 2 ;;
-      --max-tries) MAX_TRIES="${2:-}"; shift 2 ;;
-      --timeout-sec) TIMEOUT_SEC="${2:-}"; shift 2 ;;
-      --connect-timeout-sec) CONNECT_TIMEOUT_SEC="${2:-}"; shift 2 ;;
-      --split) SPLIT="${2:-}"; shift 2 ;;
-      --connections) CONNECTIONS="${2:-}"; shift 2 ;;
-      --min-split-size) MIN_SPLIT_SIZE="${2:-}"; shift 2 ;;
-      --sha256) CHECKSUM_SHA256="${2:-}"; shift 2 ;;
+      --repo) REPO_ID="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --file) GGUF_FILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --revision|--rev) REVISION="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --url) URL="$(ollama_require_arg_value "$1" "${2-}")"; SOURCE_ARG_MODE=1; shift 2 ;;
+      --local-file) LOCAL_FILE="$(ollama_require_arg_value "$1" "${2-}")"; SOURCE_ARG_MODE=1; shift 2 ;;
+      --method) METHOD="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --out-dir) DOWNLOAD_DIR="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --base-out-dir) BASE_OUT_DIR="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --retry-wait) RETRY_WAIT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --max-tries) MAX_TRIES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --timeout-sec) TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --connect-timeout-sec) CONNECT_TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --split) SPLIT="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --connections) CONNECTIONS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --min-split-size) MIN_SPLIT_SIZE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --sha256) CHECKSUM_SHA256="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
       --force) FORCE=1; shift ;;
-      --name) MODEL_NAME="${2:-}"; shift 2 ;;
+      --name) MODEL_NAME="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
       --create) CREATE_MODE=1; shift ;;
       --no-create) CREATE_MODE=0; shift ;;
-      --base-url) BASE_URL="${2:-}"; shift 2 ;;
+      --base-url) BASE_URL="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
       --ensure-server) ENSURE_SERVER=1; shift ;;
       --no-ensure-server) ENSURE_SERVER=0; shift ;;
-      --modelfile) MODFILE="${2:-}"; shift 2 ;;
-      --param) PARAMS+=("${2:-}"); shift 2 ;;
-      --num-ctx) PARAMS+=("num_ctx=${2:-}"); shift 2 ;;
+      --modelfile) MODFILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+      --param) PARAMS+=("$(ollama_require_arg_value "$1" "${2-}")"); shift 2 ;;
+      --num-ctx) PARAMS+=("num_ctx=$(ollama_require_arg_value "$1" "${2-}")"); shift 2 ;;
       --no-default-params) APPLY_DEFAULT_PARAMS=0; shift ;;
-      --log-root) LOG_ROOT="${2:-}"; refresh_run_paths; shift 2 ;;
-      --run-id) RUN_ID="${2:-}"; refresh_run_paths; shift 2 ;;
+      --log-root) LOG_ROOT="$(ollama_require_arg_value "$1" "${2-}")"; refresh_run_paths; shift 2 ;;
+      --run-id) RUN_ID="$(ollama_require_arg_value "$1" "${2-}")"; refresh_run_paths; shift 2 ;;
       --dry-run) DRY_RUN=1; shift ;;
       --print-path) PRINT_PATH=1; shift ;;
       -h|--help) usage; exit 0 ;;

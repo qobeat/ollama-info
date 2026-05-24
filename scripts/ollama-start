@@ -5,7 +5,7 @@ BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 LOG_DIR="${LOG_DIR:-$HOME/log}"
 LOG_FILE="${OLLAMA_SERVE_LOG:-$LOG_DIR/ollama-serve.log}"
 WAIT_SEC="${WAIT_SEC:-15}"
-SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 [[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
 # shellcheck source=/dev/null

@@ -1,6 +1,78 @@
 #!/usr/bin/env bash
 # Shared helpers for ollama-info scripts. Source this file; do not execute directly.
 
+ollama_now_iso() {
+  date -Is
+}
+
+ollama_log() {
+  printf '%s %s\n' "$(ollama_now_iso)" "$*"
+}
+
+ollama_warn_to_file() {
+  local file="${1:-}"; shift || true
+  printf '%s WARN: %s\n' "$(ollama_now_iso)" "$*" >&2
+  if [[ -n "$file" ]]; then
+    printf '%s WARN: %s\n' "$(ollama_now_iso)" "$*" >>"$file" 2>/dev/null || true
+  fi
+}
+
+ollama_need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { printf 'ERROR: missing command: %s\n' "$1" >&2; return 127; }
+}
+
+ollama_is_uint() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+ollama_require_arg_value() {
+  local opt="${1:-option}" val="${2-}"
+  if [[ -z "$val" || "$val" == --* ]]; then
+    printf 'ERROR: %s requires a value. Use -h for full help.\n' "$opt" >&2
+    return 2
+  fi
+  printf '%s\n' "$val"
+}
+
+ollama_script_dir() {
+  cd -- "$(dirname -- "$1")" && pwd -P
+}
+
+ollama_display_cmd() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    */*) printf '%s\n' "$cmd" ;;
+    *) printf '%s\n' "$(basename "$cmd")" ;;
+  esac
+}
+
+ollama_timestamp_stream() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(ollama_now_iso)" "$line"
+    fi
+  done
+}
+
+ollama_print_file_plain() {
+  local file="${1:-}"
+  [[ -n "$file" && -r "$file" ]] || return 0
+  cat -- "$file"
+}
+
+ollama_curl_generate() {
+  local timeout_sec="$1" connect_timeout_sec="$2" payload_file="$3" raw_file="$4" http_file="$5" stderr_file="$6" base_url="$7"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 10s "$timeout_sec" curl -sS --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$base_url/api/generate" >"$http_file" 2>"$stderr_file"
+  else
+    curl -sS --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$base_url/api/generate" >"$http_file" 2>"$stderr_file"
+  fi
+}
+
+
 ollama_timeout_cmd() {
   local seconds="${1:-3}"; shift || true
   if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi

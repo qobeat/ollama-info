@@ -1,0 +1,90 @@
+# plan-1.5.txt
+
+Goal: audit v1.4 against README.md and changelog/ claims, fix implementation gaps, reduce CLI ambiguity/noise, and produce v1.5.
+
+## Review method
+1. Treat README.md and changelog/ as the authoritative requirements source.
+2. Convert user-visible behavior into atomic requirements in changelog/atomic-requirements-v1.5.txt.
+3. Review scripts for implementation coverage, CLI usability, displayed-output clarity, duplication, and architecture.
+4. Patch only issues that materially affect correctness, usability, or maintainability.
+5. Re-run syntax and behavioral checks using fake Ollama/system tools where real RTX 3090 hardware is unavailable.
+
+## Issues found
+ISSUE-001 Requirements were implicit in README/changelog prose.
+Impact: future changes could regress behavior without a checklist.
+Fix: create changelog/atomic-requirements-v1.5.txt with atomic requirement IDs and final status.
+
+ISSUE-002 README targeted generic Bash 4+, while user requested precise Bash 5.2+ implementation.
+Impact: unclear compatibility contract.
+Fix: update README target to Bash 5.2+ and validate under installed Bash.
+
+ISSUE-003 Final summary lines were being timestamped by print_file_timestamped.
+Impact: copied terminal output mixed progress logs with summary data and became harder to read.
+Fix: keep timestamped collector/progress lines, but print terminal-summary.txt blocks plainly with no timestamp prefix.
+
+ISSUE-004 Monitor printed a plain summary and then repeated timestamped Report/CSV/ZIP/Run-dir lines.
+Impact: duplicated summary artifact information.
+Fix: when terminal summary is printed, suppress the extra post-summary artifact logs.
+
+ISSUE-005 Direct script directory resolution depended on realpath, which was not documented as a dependency.
+Impact: unnecessary external tool dependency.
+Fix: use Bash/core shell `cd dirname && pwd -P`; keep realpath only as optional downloader local-path convenience.
+
+ISSUE-006 Core scripts duplicated small helpers for log/warn/need_cmd/is_uint/timestamp streams.
+Impact: repeated logic and inconsistent future maintenance.
+Fix: centralize common helpers in scripts/ollama-common.sh and route primary scripts through them.
+
+ISSUE-007 Option parsing with missing values could produce shell shift/errexit behavior rather than a clear CLI error.
+Impact: poor UX for commands like `--model` or `--method` without a value.
+Fix: add and use ollama_require_arg_value across primary scripts and downloader.
+
+ISSUE-008 Direct test required GNU timeout even though README marked timeout optional.
+Impact: documented optional dependency was effectively mandatory.
+Fix: move generate curl invocation into common helper with GNU timeout when present and curl --max-time fallback when absent.
+
+ISSUE-009 README artifact list said monitor CSV was samples.csv, while implementation writes gpu.csv.
+Impact: user would look for the wrong file.
+Fix: update README to gpu.csv.
+
+ISSUE-010 Downloader had several long-running paths whose logs were not consistently timestamped.
+Impact: harder incident review during large GGUF downloads.
+Fix: route downloader log/warn through common timestamped helpers.
+
+ISSUE-011 README and changelog did not explicitly state the new display contract from the user: collector lines timestamped, summaries plain.
+Impact: ambiguity about timestamp rules.
+Fix: update README timestamp section, changelog, and verification tests.
+
+## Implementation plan
+1. Add common helpers in scripts/ollama-common.sh:
+   - ollama_now_iso
+   - ollama_log
+   - ollama_warn_to_file
+   - ollama_need_cmd
+   - ollama_is_uint
+   - ollama_require_arg_value
+   - ollama_timestamp_stream
+   - ollama_print_file_plain
+   - ollama_curl_generate
+2. Update primary scripts to source common early and use shared helpers.
+3. Update option parsing in primary scripts and downloader to require clear values.
+4. Replace mandatory timeout use in generation calls with ollama_curl_generate fallback.
+5. Replace terminal summary timestamp printing with plain summary output.
+6. Suppress duplicate post-summary artifact logs in monitor.
+7. Remove realpath from script-directory resolution.
+8. Update README.md, bashrc/README.md as needed, and changelog/CHANGELOG.md.
+9. Create atomic-requirements-v1.5.txt and plan-1.5.txt.
+10. Add REVIEW-v1.5.md, VERIFY-v1.5.md, and REFLECTION-v1.5.md.
+11. Regenerate PACKAGE-MANIFEST.txt.
+12. Validate with syntax checks, self-test, fake Ollama success/error paths, no-argument/missing-model paths, missing option-value tests, output timestamp/plain-summary tests, downloader dry-run checks, and zip integrity.
+
+## Success conditions
+SC-001 All atomic requirements in changelog/atomic-requirements-v1.5.txt are PASS or explicitly documented.
+SC-002 `bash -n` passes for all package shell scripts and bashrc/.bashrc.
+SC-003 Default direct test output has timestamped START/DONE/progress lines and an untimestamped terminal summary block.
+SC-004 Default orchestrator output has timestamped collector/progress lines and an untimestamped terminal summary block.
+SC-005 Monitor self-test output has timestamped monitor progress and an untimestamped terminal summary block.
+SC-006 Missing option values produce clear errors.
+SC-007 Missing model and ambiguous model behavior remains compact and does not dump full help.
+SC-008 `ollama models` suggestions through wrapper remain `ollama test <model>`.
+SC-009 one-argument aria2 downloader dry-run still infers repo/file/model/num_ctx.
+SC-010 zip package contains scripts/, changelog/, bashrc/, README.md, and PACKAGE-MANIFEST.txt.
