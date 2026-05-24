@@ -1,3 +1,13 @@
+# v1.3.0 - timestamped logs, clean error hints, NVIDIA snapshots, package reorg
+
+- Moved executable scripts into `scripts/`.
+- Moved changelog/review/verify/reflection files into `changelog/`.
+- Fixed false-positive `api_error` classification where successful Ollama `/api/generate` JSON was treated as an error body.
+- Suppressed terminal error-hint blocks when `primary_error_class=none`.
+- Added ISO timestamp prefixes to operational test/monitor/orchestrator log lines.
+- Added orchestrator-level NVIDIA start/end snapshots to `ollama-test-and-monitor-RTX3090.sh` under `hardware/`.
+- Cleaned `.bashrc` so it prepends `~/dev/ollama-info/scripts` and uses one Ollama compatibility wrapper.
+
 # Changelog
 
 ## v1.2.0

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.2.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.2.0-sudo-systemd-detection-short-help"
+VERSION="1.3.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.3.0-timestamped-clean-errors-nvidia-snapshots-reorg"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -38,6 +38,7 @@ CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
 TEST_ROOT="$RUN_DIR/test"
+HARDWARE_ROOT="$RUN_DIR/hardware"
 SUMMARY_MD="$RUN_DIR/orchestrator-summary.md"
 TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
@@ -113,9 +114,9 @@ EOF_USAGE
 short_usage() {
   cat <<EOF_SHORT
 ollama-test-and-monitor-RTX3090.sh v$VERSION
-Usage: $(basename "$0") <model-pattern> [options]
-Example: $(basename "$0") qwen3.6
-Safe first run: $(basename "$0") qwen3.6 --no-conc --concurrency 1
+Usage: $(script_display_cmd) <model-pattern> [options]
+Example: $(script_display_cmd) qwen3.6
+Safe first run: $(script_display_cmd) qwen3.6 --no-conc --concurrency 1
 Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
 Use -h for full options.
 EOF_SHORT
@@ -127,27 +128,53 @@ show_no_args_screen() {
   ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
   echo
   if ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
-    ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC"
+    ollama_print_available_model_commands "$BASE_URL" "$(script_display_cmd)" "$CONNECT_TIMEOUT_SEC"
   else
     ollama_print_start_hint "$BASE_URL"
   fi
 }
 
 require_ollama_ready() {
-  ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
+  { ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true; } | timestamp_stream
   if ! ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
-    echo
-    ollama_print_start_hint "$BASE_URL"
+    { echo; ollama_print_start_hint "$BASE_URL"; } | timestamp_stream
     trap - EXIT INT TERM 2>/dev/null || true
     exit 3
   fi
 }
 
-log() { printf '%s\n' "$*"; }
-warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+print_file_timestamped() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(date -Is)" "$line"
+    fi
+  done <"$1"
+}
 script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
+script_display_cmd() {
+  case "$0" in
+    */*) printf '%s\n' "$0" ;;
+    *) printf '%s\n' "$(basename "$0")" ;;
+  esac
+}
+
+timestamp_stream() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(date -Is)" "$line"
+    fi
+  done
+}
 
 ORIGINAL_ARGC=$#
 NO_MODEL_ARGS=0
@@ -205,10 +232,11 @@ case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think mus
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
 TEST_ROOT="$RUN_DIR/test"
+HARDWARE_ROOT="$RUN_DIR/hardware"
 SUMMARY_MD="$RUN_DIR/orchestrator-summary.md"
 TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
-mkdir -p "$RUN_DIR" "$MONITOR_ROOT" "$TEST_ROOT" "$TMP_DIR"
+mkdir -p "$RUN_DIR" "$MONITOR_ROOT" "$TEST_ROOT" "$HARDWARE_ROOT" "$TMP_DIR"
 : >"$ERRORS_FILE"
 
 SD="$(script_dir)"
@@ -250,19 +278,38 @@ select_or_explain_model() {
   if [[ "$rc" == "5" ]]; then
     matches="$resolved"
     echo "ERROR: model pattern '$pattern' is ambiguous. Use one exact model name:" >&2
-    ollama_print_model_commands "$(basename "$0")" "$matches" "  - " >&2
+    ollama_print_model_commands "$(script_display_cmd)" "$matches" "  - " >&2
     echo "Use -h for full options." >&2
     trap - EXIT INT TERM 2>/dev/null || true
     exit 5
   fi
   echo "ERROR: no local Ollama model matched pattern '$pattern'." >&2
-  ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC" >&2 || true
+  ollama_print_available_model_commands "$BASE_URL" "$(script_display_cmd)" "$CONNECT_TIMEOUT_SEC" >&2 || true
   echo "Use -h for full options." >&2
   trap - EXIT INT TERM 2>/dev/null || true
   exit 4
 }
 
 latest_file() { find "$1" -name "$2" -type f 2>/dev/null | sort | tail -1 || true; }
+capture_nvidia_boundary() {
+  local label="$1"
+  mkdir -p "$HARDWARE_ROOT"
+  {
+    echo "# nvidia-smi $label snapshot"
+    echo "timestamp=$(date -Is)"
+    echo
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi
+    else
+      echo "nvidia-smi not found"
+    fi
+  } >"$HARDWARE_ROOT/nvidia-smi-$label.txt" 2>&1 || true
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi -q -d POWER,TEMPERATURE,CLOCK,PERFORMANCE,PCI,MEMORY,UTILIZATION >"$HARDWARE_ROOT/nvidia-smi-q-$label.txt" 2>&1 || true
+    nvidia-smi --query-gpu=timestamp,index,name,driver_version,pci.bus_id,temperature.gpu,power.draw,power.limit,memory.used,memory.total,memory.free,utilization.gpu,utilization.memory,clocks.gr,clocks.sm,clocks.mem,pcie.link.gen.current,pcie.link.width.current,pcie.link.gen.max,pcie.link.width.max,pstate,fan.speed --format=csv >"$HARDWARE_ROOT/nvidia-smi-query-$label.csv" 2>&1 || true
+    nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv >"$HARDWARE_ROOT/nvidia-compute-apps-$label.csv" 2>&1 || true
+  fi
+}
 
 make_terminal_summary() {
   local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail
@@ -290,7 +337,7 @@ make_terminal_summary() {
     else
       echo "Perf    : test CSV not found"
     fi
-    if [[ -n "$hint_file" && -f "$hint_file" ]]; then
+    if [[ -n "$hint_file" && -f "$hint_file" ]] && ! grep -q '^primary_error_class=none$' "$hint_file"; then
       awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$hint_file" | head -5
     fi
     if [[ "$TEST_RC" -ne 0 ]]; then
@@ -324,6 +371,7 @@ make_terminal_summary() {
     fi
     echo "Files:"
     echo "  run : $RUN_DIR"
+    echo "  hw  : $HARDWARE_ROOT"
     echo "  zip : ${ARCHIVE_PATH:-not-created}"
     echo "  md  : $SUMMARY_MD"
     echo "  test: ${test_summary:-not-found}"
@@ -367,6 +415,8 @@ make_summary() {
     echo "- soak aggregate CSV: ${soak_csv:-not found}"
     echo "- monitor report: ${monitor_report:-not found}"
     echo "- monitor GPU CSV: ${monitor_csv:-not found}"
+    echo "- orchestrator NVIDIA start snapshot: $HARDWARE_ROOT/nvidia-smi-start.txt"
+    echo "- orchestrator NVIDIA end snapshot: $HARDWARE_ROOT/nvidia-smi-end.txt"
     echo "- monitor console: $RUN_DIR/monitor.console.log"
     echo "- test console: $RUN_DIR/test.console.log"; echo
     echo "## Retention guidance"
@@ -397,6 +447,7 @@ cleanup() {
     wait "$MONITOR_PID" 2>/dev/null || true
   fi
   if [[ "$ZIP_ON_EXIT" == "1" ]]; then ARCHIVE_PATH="$TMP_DIR/ollama-test-and-monitor-RTX3090-$RUN_ID.zip"; printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"; fi
+  capture_nvidia_boundary end || true
   make_terminal_summary || true
   make_summary || true
   make_archive || true
@@ -418,6 +469,8 @@ log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
 log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 log "Monitor: interval=${INTERVAL}s profile=$MONITOR_PROFILE"
+log "Capturing NVIDIA start snapshot..."
+capture_nvidia_boundary start || true
 log "Starting monitor..."
 
 BASE_URL="$BASE_URL" OUT_DIR="$MONITOR_ROOT" TMP_DIR="$TMP_DIR" "$MONITOR_SCRIPT" --interval "$INTERVAL" --profile "$MONITOR_PROFILE" --run-id "$RUN_ID-monitor" --no-zip >"$RUN_DIR/monitor.console.log" 2>&1 &
@@ -446,5 +499,5 @@ set -e
 
 cleanup
 
-if [[ "$PRINT_TERMINAL_SUMMARY" == "1" && -s "$TERMINAL_SUMMARY" ]]; then cat "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
+if [[ "$PRINT_TERMINAL_SUMMARY" == "1" && -s "$TERMINAL_SUMMARY" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
 exit "$TEST_RC"

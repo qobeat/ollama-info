@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.2.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.2.0-sudo-systemd-detection-short-help"
+VERSION="1.3.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.3.0-timestamped-clean-errors-nvidia-snapshots-reorg"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -121,9 +121,9 @@ EOF_USAGE
 short_usage() {
   cat <<EOF_SHORT
 ollama-test-RTX3090.sh v$VERSION
-Usage: $(basename "$0") <model-pattern> [options]
-Example: $(basename "$0") qwen3.6
-Safe first run: $(basename "$0") qwen3.6 --no-conc --concurrency 1
+Usage: $(script_display_cmd) <model-pattern> [options]
+Example: $(script_display_cmd) qwen3.6
+Safe first run: $(script_display_cmd) qwen3.6 --no-conc --concurrency 1
 Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
 Use -h for full options.
 EOF_SHORT
@@ -135,26 +135,51 @@ show_no_args_screen() {
   ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
   echo
   if ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
-    ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC"
+    ollama_print_available_model_commands "$BASE_URL" "$(script_display_cmd)" "$CONNECT_TIMEOUT_SEC"
   else
     ollama_print_start_hint "$BASE_URL"
   fi
 }
 
 require_ollama_ready() {
-  ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
+  { ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true; } | timestamp_stream
   if ! ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
-    echo
-    ollama_print_start_hint "$BASE_URL"
+    { echo; ollama_print_start_hint "$BASE_URL"; } | timestamp_stream
     exit 3
   fi
 }
 
-log() { printf '%s\n' "$*"; }
-warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+print_file_timestamped() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(date -Is)" "$line"
+    fi
+  done <"$1"
+}
+timestamp_stream() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(date -Is)" "$line"
+    fi
+  done
+}
 script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
+script_display_cmd() {
+  case "$0" in
+    */*) printf '%s\n' "$0" ;;
+    *) printf '%s\n' "$(basename "$0")" ;;
+  esac
+}
 
 ORIGINAL_ARGC=$#
 NO_MODEL_ARGS=0
@@ -271,12 +296,12 @@ select_or_explain_model() {
   if [[ "$rc" == "5" ]]; then
     matches="$resolved"
     echo "ERROR: model pattern '$pattern' is ambiguous. Use one exact model name:" >&2
-    ollama_print_model_commands "$(basename "$0")" "$matches" "  - " >&2
+    ollama_print_model_commands "$(script_display_cmd)" "$matches" "  - " >&2
     echo "Use -h for full options." >&2
     exit 5
   fi
   echo "ERROR: no local Ollama model matched pattern '$pattern'." >&2
-  ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC" >&2 || true
+  ollama_print_available_model_commands "$BASE_URL" "$(script_display_cmd)" "$CONNECT_TIMEOUT_SEC" >&2 || true
   echo "Use -h for full options." >&2
   exit 4
 }
@@ -503,9 +528,12 @@ make_failure_hints() {
   } >"$FAILURE_HINTS"
   shopt -s nullglob
   for f in "$RAW_DIR"/*.json; do
+    [[ -e "$f" ]] || continue
+    raw_response_is_error "$f" "${f%.json}.http" || continue
     body="$(error_body_from_raw "$f" "${f%.json}.stderr")"
-    [[ -n "$body" ]] || continue
-    class="$(classify_failure 0 000 "$body" "${f%.json}.stderr")"
+    [[ -n "$body" ]] || body="http=$(cat "${f%.json}.http" 2>/dev/null || printf 000) raw=$(head -c 500 "$f" 2>/dev/null | tr '\n' ' ')"
+    local_http="$(tr -dc '0-9' <"${f%.json}.http" 2>/dev/null | tail -c 3)"; [[ -n "$local_http" ]] || local_http=000
+    class="$(classify_failure 0 "$local_http" "$body" "${f%.json}.stderr")"
     if [[ -z "$first_body" ]]; then first_body="$body"; first_class="$class"; fi
     count=$((count + 1))
   done
@@ -593,16 +621,30 @@ append_csv_line() {
 
 error_body_from_raw() {
   local raw_file="$1" stderr_file="$2" body=""
+  # A successful Ollama /api/generate response is valid JSON too. Do not treat
+  # successful JSON as an error body. Only explicit error/message/detail fields
+  # in JSON are error bodies. Non-JSON raw text can still be diagnostic output.
   if [[ -s "$raw_file" ]] && jq -e . "$raw_file" >/dev/null 2>&1; then
-    body="$(jq -r '.error // .message // .detail // empty' "$raw_file" 2>/dev/null | head -c 1200)"
-  fi
-  if [[ -z "$body" && -s "$raw_file" ]]; then
+    body="$(jq -r 'if has("error") then (.error|tostring) elif has("message") then (.message|tostring) elif has("detail") then (.detail|tostring) else empty end' "$raw_file" 2>/dev/null | head -c 1200)"
+  elif [[ -s "$raw_file" ]]; then
     body="$(head -c 1200 "$raw_file" | tr '\n' ' ')"
   fi
   if [[ -z "$body" && -s "$stderr_file" ]]; then
     body="$(head -c 1200 "$stderr_file" | tr '\n' ' ')"
   fi
   printf '%s' "$body"
+}
+
+raw_response_is_error() {
+  local raw_file="$1" http_file="${2:-}" http_code="000"
+  if [[ -n "$http_file" && -s "$http_file" ]]; then
+    http_code="$(tr -dc '0-9' <"$http_file" 2>/dev/null | tail -c 3)"
+    [[ -n "$http_code" ]] || http_code="000"
+  fi
+  if [[ ! "$http_code" =~ ^2 ]]; then return 0; fi
+  if [[ ! -s "$raw_file" ]]; then return 1; fi
+  if ! jq -e . "$raw_file" >/dev/null 2>&1; then return 0; fi
+  jq -e 'has("error")' "$raw_file" >/dev/null 2>&1
 }
 
 classify_failure() {
@@ -619,6 +661,7 @@ classify_failure() {
   if [[ "$http_code" =~ ^5 ]]; then printf 'ollama_server_error_%s' "$http_code"; return 0; fi
   if [[ "$http_code" =~ ^4 ]]; then printf 'ollama_client_error_%s' "$http_code"; return 0; fi
   if [[ "$rc" != "0" ]]; then printf 'curl_failed_rc_%s' "$rc"; return 0; fi
+  if [[ -z "$text" ]]; then printf 'none'; return 0; fi
   printf 'api_error'
 }
 
@@ -679,7 +722,9 @@ run_generate() {
     return 0
   fi
   append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "" "$http_code" "" ""
-  jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" --arg http "$http_code" '"DONE  [\($step)/\($planned)] http=" + $http + " done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" || true
+  local done_line
+  done_line="$(jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" --arg http "$http_code" '"DONE  [\($step)/\($planned)] http=" + $http + " done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" 2>/dev/null || true)"
+  [[ -n "$done_line" ]] && log "$done_line"
 }
 
 with_prefix() { if [[ -n "$PROMPT_PREFIX" ]]; then printf '%s\n%s' "$PROMPT_PREFIX" "$1"; else printf '%s' "$1"; fi; }
@@ -788,7 +833,7 @@ make_terminal_summary() {
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
       {rows++; cat=unq($(h["category"])); mode=unq($(h["mode"])); conc=unq($(h["concurrency"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"]))+0; total=unq($(h["total_s"]))+0; load=unq($(h["load_s"]))+0; resp=unq($(h["response_chars"]))+0; think=unq($(h["thinking_chars"]))+0; pe=unq($(h["prompt_eval_tokens"]))+0; ctx=unq($(h["num_ctx"]))+0; fill=unq($(h["context_fill_pct"]))+0; if(err!="") errors++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>cold_load)cold_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warm_n++; warm_sum+=gen; if(warm_n==1||gen>warm_max)warm_max=gen; if(warm_n==1||gen<warm_min)warm_min=gen}; if(cat=="longctx"){long_gen=gen; long_fill=fill; long_pe=pe; long_ctx=ctx}; if(total>max_total)max_total=total}
       END{status=(errors>0?"FAIL":((think_only>0||long_fill<minfill)?"PASS_WITH_WARNINGS":"PASS")); printf "Status  : %s\n", status; if(warm_n>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs; max total %.2fs\n", cold_load, max_total; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", long_pe, long_ctx, long_fill, long_gen, (long_fill>=minfill?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, think_only, errors; if(errors>0 && visible==0) print "Verdict : inference-health INCONCLUSIVE; model never produced usable tokens"}' "$SUMMARY_CSV"
-    if [[ -s "$FAILURE_HINTS" ]]; then
+    if [[ -s "$FAILURE_HINTS" ]] && ! grep -q '^primary_error_class=none$' "$FAILURE_HINTS"; then
       awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$FAILURE_HINTS" | head -5
     fi
     if [[ -s "$CONC_AGG_CSV" ]]; then
@@ -890,6 +935,6 @@ make_summary_md
 make_terminal_summary
 make_archive
 
-if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then cat "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; log "CSV:     $SUMMARY_CSV"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
+if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; else log "Summary: $SUMMARY_MD"; log "CSV:     $SUMMARY_CSV"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:     $ARCHIVE_PATH"; fi; log "Run dir: $RUN_DIR"; fi
 ERROR_COUNT="$(awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s} NR==1{for(i=1;i<=NF;i++)h[unq($i)]=i; next} {if(unq($(h["error"]))!="")e++} END{print e+0}' "$SUMMARY_CSV")"
 if [[ "$ERROR_COUNT" -gt 0 ]]; then exit 1; fi

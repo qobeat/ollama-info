@@ -1,40 +1,45 @@
-644 6252 ./CHANGELOG.md
-644 31700 ./README.md
-644 4337 ./REFLECTION-v0.5.md
-644 1307 ./REFLECTION-v0.6.md
-644 2678 ./REFLECTION-v0.7.md
-644 1708 ./REFLECTION-v0.8.md
-644 2029 ./REFLECTION-v0.9.md
-644 1051 ./REFLECTION-v1.0.md
-644 1163 ./REFLECTION-v1.1.md
-644 1219 ./REFLECTION-v1.2.md
-644 2875 ./REVIEW-v0.5.md
-644 1414 ./REVIEW-v0.6.md
-644 2444 ./REVIEW-v0.7.md
-644 1232 ./REVIEW-v0.8.md
-644 2240 ./REVIEW-v0.9.md
-644 1803 ./REVIEW-v1.0.md
-644 2263 ./REVIEW-v1.1.md
-644 2572 ./REVIEW-v1.2.md
-644 3551 ./VERIFY-v0.7.md
-644 1662 ./VERIFY-v0.8.md
-644 2732 ./VERIFY-v0.9.md
-644 1511 ./VERIFY-v1.0.md
-644 2412 ./VERIFY-v1.1.md
-644 2594 ./VERIFY-v1.2.md
-644 12254 ./bashrc/.bashrc
-644 4251 ./bashrc/README.md
-644 9910 ./ollama-common.sh
-755 28293 ./ollama-download.sh
-755 4624 ./ollama-gen
-755 33642 ./ollama-monitor.sh
-755 13936 ./ollama-perf
-755 13089 ./ollama-perf-table
-755 1999 ./ollama-start
-755 3715 ./ollama-status
-755 2011 ./ollama-stop
-755 49423 ./ollama-test-RTX3090.sh
-755 24243 ./ollama-test-and-monitor-RTX3090.sh
-644 8316 ./plan.txt
-644 2074 ./tools/legacy/calc_perf_ollama.py
-644 4941 ./tools/legacy/calc_perf_ollama_table.py
+# PACKAGE MANIFEST
+
+d8077fe6472a09c11388299de03e7dc87a70ac7ae53dd787e1ce52f37fc84a41  README.md
+1ab2841cdbeac25b70e2131443aa83224da03ad687fa4cb61efb1a38d29adb3d  bashrc/.bashrc
+0ffc9eb21b9bfd9cea167452f98d8cedc88e0b4c91dcfb2b378222827d3a14cb  bashrc/README.md
+6966b56c79113e94a5f4ec6cd128973d8fd934a7bc56ba05ecb12359153f0e17  changelog/CHANGELOG.md
+450bc87b83f516a1d02d0508d072dc230b744bd68e495b22367934c7d4945adb  changelog/REFLECTION-v0.5.md
+254eb58097074d0e51e710b3f6a00ea517f6170fed4860330b8a3d7e8f0be36e  changelog/REFLECTION-v0.6.md
+c18772f11aa9ac3fe964725b55164b48f7b0a2c33cb42e99fbc2f263c3444ae4  changelog/REFLECTION-v0.7.md
+a49de40c34f4571f9dbc604022422cb06e5c932b6460620ad230fa137f13c401  changelog/REFLECTION-v0.8.md
+d8fc12cd87aa75b5f47a206dad8dc328987d0e1d88b28bf85fa59c6243eaba4b  changelog/REFLECTION-v0.9.md
+0fa282bdb9f4525015a490d8368dcc8be86321db5ae77bcd306fc46d7582ad34  changelog/REFLECTION-v1.0.md
+c5169de3365e51c247d8285e4a0358efd8add04efd687323605c0a73f1303b8d  changelog/REFLECTION-v1.1.md
+f3b24f371a4158e851aa9c6ac27d4a931ec16c00439d08ac85df69ddf4604454  changelog/REFLECTION-v1.2.md
+1e03d42fe70d71de714a2e046bb8442bec6042694a4b486ae989e3640c178c73  changelog/REFLECTION-v1.3.md
+2a4d4ddc3129ec1fe368173a9b15abd3e55f4a8d9af920064d5c38ece4491f5d  changelog/REVIEW-v0.5.md
+1fd990a86dfcc9cb55d32eb0b107662ee30302e39647a5be6b6bd0bf8e2d3ef7  changelog/REVIEW-v0.6.md
+fa465c7edbb2adb03d6b7d5f933fcd543dc0fc2d22eb0d7ae4ec20b8aec684f2  changelog/REVIEW-v0.7.md
+4cffb2c64240a7984ec5e1337d76bd83bef1d6bc9b0b93aeb00bc04dc03d7e3f  changelog/REVIEW-v0.8.md
+26bbf3ef595290aa83ee0c27109ae90b7519d4b27b98edce9bc5eee2416a91ce  changelog/REVIEW-v0.9.md
+c00c1c4220471639435301addccc56b68ef0fd88503b13c5fe9b7d567d939b6f  changelog/REVIEW-v1.0.md
+01351bcf466512c6071e896999a5f979f97d93a54eb0853ae750768c74e94b5a  changelog/REVIEW-v1.1.md
+326ff1c02577ad76e9b8ee822c1ee4909e510dfce56bd23aae37499d8f77494c  changelog/REVIEW-v1.2.md
+a525ef3a38daf0577dd0fa1c628e5704c435b4b28a3f68cefaaa5b30fd152e4d  changelog/REVIEW-v1.3.md
+81d0c36add980926814f37aeb1040c9bfc5f4d011b9807ce28063e001ec8bde5  changelog/VERIFY-v0.7.md
+ad99772d6640cc49239ffcfe90cd0b0e76913a6bebeb83df65b8ce10ce553cc3  changelog/VERIFY-v0.8.md
+73f811aefb69be7de4da6a58066787cb8db499db0630825d30284a266e2ee3c4  changelog/VERIFY-v0.9.md
+90ef1899c5a0f1155687a69ec20ff084a678566e56e7c5ffcb26a47c5a995a00  changelog/VERIFY-v1.0.md
+d69e63d36efbcb489fe5583ac2c91899b533d3c69d2edbf2b8b83b5bc2436b29  changelog/VERIFY-v1.1.md
+bf4678020cdc995f4bd373a744d375fdc16075ea99dc3b72a76e04770581726b  changelog/VERIFY-v1.2.md
+4dc452bed4a05c5964bd46b1fa680426a68d1c6e8de1d8209ec849936e937d54  changelog/VERIFY-v1.3.md
+8c7b445605c90d5683a1e559b42874f13d239a57d0be422b9318546a615a3241  changelog/plan.txt
+8a18e6c6597fc741c9a65b5d17fa56fef37ddbe853beb71b4ac9ac534e5f2be2  scripts/legacy/calc_perf_ollama.py
+25a8217c40c59d46ebeb7c7bd5740078c86429ab4b7fec11683e29bd947fd4bc  scripts/legacy/calc_perf_ollama_table.py
+25170c88c8c0e3f6b9a95ee3653e802121496c06a48daadc31a74def290a10f0  scripts/ollama-common.sh
+d868c7d393994c3e6e7fa59d4567956771b46bf2aedd455af00faf4c46e7322b  scripts/ollama-download.sh
+366358864c490b26d1e990b3db2aa38bb6659d2bf147d188df26b806f230e7a7  scripts/ollama-gen
+44d4935d5437e653c9ea195a81794d78e4d5bbfdf231919f0bfd3120a4a41b14  scripts/ollama-monitor.sh
+19780f3d91cdbbd05bdf919b0c825aebea56bac4815d1f7b4df76ad4f992b841  scripts/ollama-perf
+0cef54b051b3896a5ad1aa3d4af62d394d87d4ae0ebe847ce1086e4ff193ddf6  scripts/ollama-perf-table
+1b81f6c2a64367a5dd8f5426ec635164df1c3589238486275f27fd04e2a06abc  scripts/ollama-start
+ea4e746437df54f0534b208958864ab9918369f2eacb901ae81d22f73419f243  scripts/ollama-status
+d4a894c3198a9720ead2ef933174f867ff59d1ef3314df3ac042894fc2c9fb50  scripts/ollama-stop
+c48703f6ca077bb0f89c2713f5d88622ab8490c7b60d02a0b3a46646979b19c0  scripts/ollama-test-RTX3090.sh
+bd2f546574feae2fe1bda53f8fe468cfd57fc3e525695fe139b46850345e070e  scripts/ollama-test-and-monitor-RTX3090.sh

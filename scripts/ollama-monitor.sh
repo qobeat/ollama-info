@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.9.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.9.0-inference-coverage-wsl-aware"
+VERSION="1.3.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.3.0-timestamped-console"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -78,10 +78,20 @@ Outputs per run:
 EOF_USAGE
 }
 
-log() { printf '%s\n' "$*"; }
-warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
+log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+warn() { printf '%s WARN: %s\n' "$(date -Is)" "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+print_file_timestamped() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]; then
+      printf '%s\n' "$line"
+    else
+      printf '%s %s\n' "$(date -Is)" "$line"
+    fi
+  done <"$1"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -594,7 +604,7 @@ finish() {
   generate_report || warn "report generation failed"
   make_terminal_summary || warn "terminal summary generation failed"
   make_archive || warn "archive creation failed"
-  if [[ -s "$TERMINAL_SUMMARY" ]]; then cat "$TERMINAL_SUMMARY"; fi
+  if [[ -s "$TERMINAL_SUMMARY" ]]; then print_file_timestamped "$TERMINAL_SUMMARY"; fi
   log "Report: $REPORT"
   log "CSV:    $CSV"
   if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:    $ARCHIVE_PATH"; fi
