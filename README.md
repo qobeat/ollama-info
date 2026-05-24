@@ -1,4 +1,4 @@
-# ollama-info v1.5
+# ollama-info v1.6
 
 Production-oriented RTX 3090 + WSL2 + Ollama diagnostics package.
 
@@ -14,13 +14,21 @@ The primary command is intentionally short:
 ollama test qwen3.6
 ```
 
-That command resolves the local model matching `qwen3.6`, runs the safe RTX 3090 baseline, monitors GPU/Ollama telemetry in parallel, writes raw evidence to a timestamped run directory, and creates a zip archive for sharing/debugging.
+That command resolves the local model matching `qwen3.6`, runs the safe RTX 3090 generation baseline, monitors GPU/Ollama telemetry in parallel, writes raw evidence to a timestamped run directory, and creates a zip archive for sharing/debugging.
+
+Embedding-only models now have a separate valid path:
+
+```bash
+ollama embed-test bge-m3
+```
+
+Do not use an embedding-only model such as `bge-m3` as a text-generation benchmark. v1.6 detects that case before the generation suite and reports it as an actionable capability mismatch.
 
 ---
 
 ## Current status
 
-This is the first production-style README for the package. The scripts have evolved through multiple diagnostic iterations and are now organized as follows:
+This release keeps the v1.5 production/audit baseline and adds v1.6 capability-aware model handling. The scripts are organized as follows:
 
 ```text
 ollama-info/
@@ -36,6 +44,7 @@ ollama-info/
     ollama-stop
     ollama-test-and-monitor-RTX3090.sh
     ollama-test-RTX3090.sh
+    ollama-embed-test-RTX3090.sh
     ollama-monitor.sh
     ollama-download.sh
     ollama-gen
@@ -49,9 +58,19 @@ ollama-info/
     REFLECTION-*.md
 ```
 
-### v1.5 audit artifacts
+### v1.6 audit artifacts
 
-The v1.5 package includes two explicit review artifacts in `changelog/`:
+The v1.6 package includes explicit review and verification artifacts in `changelog/`:
+
+```text
+atomic-requirements-v1.6.txt   v1.5 requirements plus v1.6 capability/embedding requirements and implementation status
+plan-1.6.txt                   failure review, package change plan, and success conditions
+REVIEW-v1.6.md                 test-output review and implementation review
+VERIFY-v1.6.md                 syntax and fake-Ollama validation record
+REFLECTION-v1.6.md             final requirement completion check
+```
+
+The v1.5 package also included the original audit artifacts:
 
 ```text
 atomic-requirements-v1.5.txt   README/changelog-derived atomic requirements and final implementation status
@@ -60,12 +79,33 @@ plan-1.5.txt                   issue list, architecture review findings, and imp
 
 These files are intended to make future maintenance less ambiguous: each user-visible behavior is tracked as an atomic requirement rather than only as prose in the README.
 
+### Feature coverage
+
+The package implements these feature groups as first-class behavior and documents them in the atomic requirements file:
+
+| Feature group | Coverage |
+|---|---|
+| Product scope | RTX 3090 + WSL2 + Ollama status, model availability/loadability, controlled workload health, evidence archive. |
+| Runtime contract | Bash 5.2+ target, strict-mode shell scripts, curl/jq core dependencies, optional `timeout`, optional aria2/journalctl. |
+| CLI UX | Short primary command, no-arg compact dashboard, clear missing/ambiguous model handling, option-value validation, concise errors. |
+| Model resolution | `/api/tags` model discovery, exact/full/base/substring resolution, model-specific suggested commands. |
+| Generation benchmark | Safe single-request default, sanity/throughput/sustained/long-context rows, opt-in concurrency/CPU/soak/VRAM-pressure probes. |
+| Embedding benchmark | v1.6 `/api/embed` mode, `ollama embed-test`, vector count/dimension metrics, embedding long-context row. |
+| Capability preflight | v1.6 `/api/show` role detection, embedding-only refusal for `/api/generate`, role-aware `ollama models`. |
+| Monitoring | Continuous `gpu.csv`, monitor `report.md`, start/end NVIDIA snapshots, thermals, power, VRAM, PCIe, clocks, throttling. |
+| Evidence retention | Raw JSON, stderr, payload JSON, summaries, failure hints, server log tail, WSL diagnostics, zip archive. |
+| Summary semantics | Timestamped collector progress, plain final summaries, `Telemetry` separated from `Inference`, LongCtx N/A after API rejection. |
+| Failure handling | HTTP/body preservation, classified model-load/memory/timeout/transport/permission/API failures, v1.6 `unsupported_generate_for_embedding_model`. |
+| Downloader | One-source HF/local GGUF workflow, aria2/curl/HF modes, SHA256 verification, safe token handling, Modelfile/model creation. |
+| Bash integration | `ollama status/start/stop/models/test/embed-test/logs/gpu` helpers with upstream CLI pass-through. |
+
 ### Production readiness by script
 
 | Script | Status | Purpose |
 |---|---:|---|
 | `scripts/ollama-test-and-monitor-RTX3090.sh` | Primary / production | Orchestrates test + monitor + NVIDIA boundary snapshots + archive. Use this for normal benchmark runs. |
-| `scripts/ollama-test-RTX3090.sh` | Production engine | Runs deterministic Ollama API test requests, captures raw JSON/payloads/CSV/summary, classifies failures. Usually invoked by the orchestrator. |
+| `scripts/ollama-test-RTX3090.sh` | Production engine | Runs deterministic `/api/generate` or `/api/embed` test requests, captures raw JSON/payloads/CSV/summary, classifies failures. Usually invoked by the orchestrator. |
+| `scripts/ollama-embed-test-RTX3090.sh` | Production wrapper | Convenience wrapper for monitored `/api/embed` benchmark mode. Equivalent to orchestrator `--embedding`. |
 | `scripts/ollama-monitor.sh` | Production monitor | Samples GPU, PCIe, power, VRAM, clocks, throttling, Ollama process/model state, and writes CSV/report artifacts. |
 | `scripts/ollama-status` | Production helper | Reports systemd service state, API status, GPU quick state, models, logs, disk usage, and loaded runners. |
 | `scripts/ollama-start` | Production helper | Starts system `ollama.service` with sudo when needed; falls back only when no service exists. |
@@ -103,13 +143,25 @@ ollama status
 ollama models
 ```
 
-Run the normal RTX 3090 baseline:
+Run the normal RTX 3090 generation baseline:
 
 ```bash
 ollama test qwen3.6
 ```
 
-Run without the `.bashrc` wrapper:
+Run an embedding-model benchmark:
+
+```bash
+ollama embed-test bge-m3
+```
+
+Equivalent direct form:
+
+```bash
+./scripts/ollama-test-and-monitor-RTX3090.sh bge-m3 --embedding
+```
+
+Run generation without the `.bashrc` wrapper:
 
 ```bash
 ./scripts/ollama-test-and-monitor-RTX3090.sh qwen3.6
@@ -161,7 +213,7 @@ ollama test qwen3.6 --no-conc --concurrency 1
 
 That was a conservative first-run command after a prior model-load failure and while concurrency was still enabled by default.
 
-In v1.5, the default baseline is already the safe mode:
+In v1.6, the default generation baseline is already the safe mode:
 
 ```text
 RUN_CONC=0
@@ -210,6 +262,18 @@ pointer to -h / --help
 
 It does not print the full help.
 
+### Role-aware model commands
+
+`ollama models` now asks Ollama for model details and prints a role-aware command suggestion. Generation-capable models are suggested with `ollama test`; embedding-only models are suggested with `ollama embed-test`.
+
+Example shape:
+
+```text
+MODEL                 ROLE        SIZE     SUGGESTED COMMAND
+bge-m3:latest         embedding   1.2GB    ollama embed-test bge-m3:latest
+gemma3:1b             generate    0.8GB    ollama test gemma3:1b
+```
+
 ### Model pattern resolution
 
 ```bash
@@ -256,8 +320,9 @@ Package helper commands:
 ollama status          # package status helper
 ollama start           # sudo-aware systemctl start ollama.service
 ollama stop            # sudo-aware systemctl stop ollama.service
-ollama models          # local models + `ollama test <model>` commands
-ollama test qwen3.6    # primary benchmark workflow
+ollama models          # local models + role-aware suggested commands
+ollama test qwen3.6    # generation benchmark workflow
+ollama embed-test bge-m3 # embedding benchmark workflow
 ollama logs 200        # journalctl tail
 ollama gpu             # nvidia-smi CSV snapshot
 ```
@@ -272,7 +337,7 @@ ollama run llama3.2
 ollama serve
 ```
 
-Important: upstream Ollama does not provide a native `ollama status` subcommand in your installed CLI. This package adds `ollama status` as a Bash wrapper convenience.
+Important: upstream Ollama does not provide a native `ollama status` subcommand in your installed CLI. This package adds `ollama status` as a Bash wrapper convenience. The package also adds `ollama embed-test`; normal upstream subcommands continue to pass through.
 
 If the wrapper still shows an old script version, refresh the shell command cache and inspect path order:
 
@@ -343,9 +408,9 @@ user command
       -> zip full run directory
 ```
 
-### Default baseline tests
+### Generation benchmark mode
 
-The default v1.5 baseline runs four GPU API tests:
+The default v1.6 generation baseline runs four `/api/generate` GPU API tests:
 
 | Test | Purpose |
 |---|---|
@@ -378,9 +443,52 @@ ollama test qwen3.6 --soak-minutes 10
 ollama test qwen3.6 --run-vram-pressure --vram-model larger-model:tag
 ```
 
+### Embedding benchmark mode
+
+Use embedding mode for retrieval/RAG models such as `bge-m3`:
+
+```bash
+ollama embed-test bge-m3
+# or
+ollama test bge-m3 --embedding
+# or
+./scripts/ollama-test-and-monitor-RTX3090.sh bge-m3 --embedding
+```
+
+Embedding mode uses `/api/embed`, not `/api/generate`, and records these metrics in `summary.csv`:
+
+```text
+endpoint=/api/embed
+vector_count
+vector_dim
+embedding_tps
+prompt_eval_tokens
+context_fill_pct
+```
+
+Default embedding rows:
+
+| Test | Purpose |
+|---|---|
+| `01_embed_sanity` | Confirms the model returns at least one embedding vector. |
+| `02_embed_batch` | Confirms batch input produces vectors and records vector count/dimension. |
+| `03_embed_longctx` | Exercises long text embedding and reports prompt-token fill when Ollama returns it. |
+
+### Capability-aware preflight
+
+Before running generation tests, v1.6 calls `/api/show` with `verbose:false`, writes a slim metadata file, and classifies the model role. If the model is embedding-only, generation mode does not run four doomed requests. It records one preflight row with:
+
+```text
+error_class=unsupported_generate_for_embedding_model
+recommended_endpoint=/api/embed
+next_action=use ollama embed-test MODEL or choose a generation model
+```
+
+The package stores slim `/api/show` output by default to avoid multi-megabyte archive bloat. Use `--full-model-show` only when you need the verbose response.
+
 ### Why concurrency is no longer default
 
-Large Qwen-class models can occupy most of the 24 GB VRAM on an RTX 3090 at 8K context. Running a concurrency probe by default can turn a clean health baseline into a VRAM-pressure test. v1.5 separates those modes:
+Large Qwen-class models can occupy most of the 24 GB VRAM on an RTX 3090 at 8K context. Running a concurrency probe by default can turn a clean health baseline into a VRAM-pressure test. v1.5 introduced this separation and v1.6 retains it:
 
 ```text
 baseline = single request, stable health/performance signal
@@ -457,13 +565,24 @@ active compute processes
 
 ## Reading results
 
-A successful baseline should show:
+A successful generation baseline should show:
 
 ```text
 Test    : PASS
 Output  : visible rows N/N; thinking-only 0; errors 0
 LongCtx : ... OK
-Health  : PASS or PASS_WITH_CHECKS
+Inference: PASS; completed generation benchmark
+Telemetry: PASS or PASS_WITH_CHECKS
+```
+
+A successful embedding baseline should show:
+
+```text
+Test    : PASS
+Embed   : vectors=N dim=D rows=N ok=N
+LongEmb : ... OK
+Inference: PASS; completed embedding benchmark
+Telemetry: PASS or PASS_WITH_CHECKS
 ```
 
 `PASS_WITH_CHECKS` does not necessarily mean the model test failed. It means the hardware monitor observed something worth reviewing, such as high VRAM occupancy, power-limit behavior, PCIe width, or unavailable memory temperature telemetry.
@@ -472,9 +591,12 @@ Common result interpretation:
 
 | Signal | Meaning |
 |---|---|
-| `Test: PASS` | Ollama API requests completed and generated output. |
+| `Test: PASS` | Ollama API requests completed for the selected mode. |
+| `Inference: PASS` | A completed generation or embedding benchmark was observed. |
+| `Telemetry: PASS` | GPU telemetry stayed inside package thresholds during the run. |
 | `Error: class=model_load_error` | Ollama API returned a load failure. Inspect model blob/store and server logs. |
-| `Health: PASS_WITH_CHECKS` | GPU ran but one or more monitor thresholds deserve attention. |
+| `Error: class=unsupported_generate_for_embedding_model` | An embedding-only model was selected for `/api/generate`. Use `ollama embed-test MODEL` or choose a generation model. |
+| `Telemetry: PASS_WITH_CHECKS` | GPU telemetry collection succeeded but one or more monitor thresholds deserve attention. |
 | `VRAM high` | Model/context approached RTX 3090 memory capacity. Treat concurrency as stress-only. |
 | `PCIe width x8 / max x16` | Often expected in some motherboard slot configurations, but worth checking when GPU is busy. |
 | `sw_power > 0` | GPU hit software power limit; common under heavy load, usually not a test failure by itself. |
@@ -519,6 +641,17 @@ Override only when needed:
 
 ---
 
+### dmesg scan semantics
+
+The test runner captures a dmesg cursor before the benchmark and reports two sections after the run:
+
+```text
+new during this run
+historical since boot
+```
+
+This prevents old WSL/dxg/NVIDIA boot messages from being misread as the cause of the current benchmark failure.
+
 ## Troubleshooting
 
 ### `ollama status` says service not found, but `systemctl status ollama` works
@@ -553,6 +686,23 @@ Start the system service:
 sudo systemctl start ollama
 systemctl status ollama --no-pager
 curl -fsS http://127.0.0.1:11434/api/version && echo
+```
+
+### `bge-m3` or another embedding model says it does not support generate
+
+This means the selected model is embedding-only. It is not an RTX 3090 failure and not an Ollama service failure.
+
+Use:
+
+```bash
+ollama embed-test bge-m3
+```
+
+For generation health, use a generation-capable model:
+
+```bash
+ollama test gemma3:1b
+ollama test qwen3.6
 ```
 
 ### Model pattern is not found
@@ -591,6 +741,7 @@ For custom GGUF imports, recreate the model from the Modelfile.
 
 | Version | Main change |
 |---|---|
+| v1.6 | Capability-aware `/api/show` preflight, embedding `/api/embed` benchmark mode, `ollama embed-test`, role-aware model commands, slim model metadata by default, `Telemetry` vs `Inference` summaries, LongCtx N/A after API rejection, dmesg new-vs-historical split. |
 | v1.5 | Atomic requirements audit, Bash 5.2+ target, shared helper cleanup, clear option-value validation, optional `timeout` fallback, plain final summaries after timestamped collector progress. |
 | v1.4 | Production README, safe default baseline, `--stress` shorthand, model command UX cleanup. |
 | v1.3 | Timestamped operational logs, fixed false API-error classification, NVIDIA start/end snapshots, `scripts/` + `changelog/` layout. |
@@ -609,4 +760,4 @@ Full notes are in `changelog/`.
 2. **Do not run destructive/stress probes by default.** Concurrency, soak, CPU comparison, and VRAM pressure are explicit.
 3. **Prefer systemd for Ollama lifecycle.** Shell variables are client-side only; service variables belong in systemd overrides.
 4. **Make failure modes actionable.** Missing model, ambiguous model, API down, and model-load errors each produce targeted next commands.
-5. **Keep the default command short.** Normal operation should be `ollama test qwen3.6`.
+5. **Keep the default command short.** Normal generation operation should be `ollama test qwen3.6`; normal embedding operation should be `ollama embed-test bge-m3`.

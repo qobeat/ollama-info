@@ -1,3 +1,16 @@
+# v1.6.0 - capability-aware model roles and embedding benchmark mode
+
+- Reviewed the `bge-m3` failure and classified it as an embedding-only model being sent to `/api/generate`, not as an RTX 3090/Ollama service failure.
+- Reviewed the later `gemma3:1b` output as a successful generation benchmark on the RTX 3090 path.
+- Added `/api/show` capability preflight and slim model metadata capture by default.
+- Added `unsupported_generate_for_embedding_model` failure classification with targeted failure hints.
+- Added `/api/embed` benchmark mode, vector count/dimension metrics, and embedding throughput fields.
+- Added `scripts/ollama-embed-test-RTX3090.sh` and Bash wrapper command `ollama embed-test`.
+- Updated `ollama models` suggestions to show model role, size, and role-appropriate command.
+- Changed summary semantics to separate `Telemetry` from `Inference` and report LongCtx/LongEmb as N/A when prompt evaluation never occurred.
+- Split dmesg scan into new-during-run and historical-since-boot sections.
+- Updated README, Bash README, review, verify, reflection, and atomic requirement audit for v1.6.
+
 # v1.5.0 - atomic requirements audit and Bash 5.2+ cleanup
 
 - Added `changelog/atomic-requirements-v1.5.txt` with README/changelog-derived atomic requirements and final implementation status.

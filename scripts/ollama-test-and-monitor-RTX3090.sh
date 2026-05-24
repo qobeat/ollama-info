@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.5.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.5.0-atomic-review-plain-summary"
+VERSION="1.6.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.6.0-capability-aware-embed-mode"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -40,6 +40,8 @@ PRINT_TERMINAL_SUMMARY="${PRINT_TERMINAL_SUMMARY:-1}"
 THINK="${THINK:-false}"
 SERVER_LOG_LINES="${SERVER_LOG_LINES:-240}"
 CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
+EMBEDDING_MODE="${EMBEDDING_MODE:-0}"
+FULL_MODEL_SHOW="${FULL_MODEL_SHOW:-0}"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
@@ -79,7 +81,7 @@ Model selection:
 Defaults for RTX 3090 baseline:
   Safe single-request baseline: concurrency probe disabled by default.
   monitor-profile=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT
-  long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK
+  long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK embedding=$EMBEDDING_MODE
 
 Core options:
   --model PATTERN           Model name or pattern to resolve locally
@@ -95,6 +97,8 @@ Core options:
   --long-prompt-words N     True long-context prompt size (default: $LONG_PROMPT_WORDS)
   --concurrency N           Test concurrency probe size (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
+  --embedding               Run /api/embed benchmark mode instead of /api/generate
+  --full-model-show         Also archive full verbose /api/show output; default stores slim metadata only
   --server-log-lines N      Capture last N Ollama server log lines in test artifacts (default: $SERVER_LOG_LINES)
   --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots in test artifacts
 
@@ -126,7 +130,8 @@ Usage: $(script_display_cmd) <model-pattern> [options]
 Example: $(script_display_cmd) qwen3.6
 Baseline run: $(script_display_cmd) qwen3.6
 Stress run:   $(script_display_cmd) qwen3.6 --stress
-Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
+Embed run:    $(script_display_cmd) bge-m3 --embedding
+Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE
 Use -h for full options.
 EOF_SHORT
 }
@@ -181,6 +186,10 @@ while [[ $# -gt 0 ]]; do
     --long-prompt-words) LONG_PROMPT_WORDS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --concurrency) CONCURRENCY="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --embedding|--embed) EMBEDDING_MODE=1; shift ;;
+    --no-embedding|--no-embed) EMBEDDING_MODE=0; shift ;;
+    --full-model-show) FULL_MODEL_SHOW=1; shift ;;
+    --no-full-model-show) FULL_MODEL_SHOW=0; shift ;;
     --server-log-lines) SERVER_LOG_LINES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
     --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
@@ -294,7 +303,7 @@ capture_nvidia_boundary() {
 }
 
 make_terminal_summary() {
-  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail
+  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail model_role model_mode
   test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
   conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
   soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
@@ -303,27 +312,59 @@ make_terminal_summary() {
   monitor_report="$(latest_file "$MONITOR_ROOT" report.md)"
   hint_file="$(latest_file "$TEST_ROOT" failure-hints.txt)"
   server_log_tail="$(latest_file "$TEST_ROOT" ollama-server-log-tail.txt)"
+  model_role="unknown"
+  model_mode="$([[ "$EMBEDDING_MODE" == "1" ]] && echo embedding || echo generation)"
+  if [[ -n "$test_csv" && -f "$test_csv" ]]; then
+    local cap_file
+    cap_file="$(latest_file "$TEST_ROOT" model-capability.json)"
+    if [[ -n "$cap_file" && -s "$cap_file" ]]; then
+      model_role="$(jq -r '.role // "unknown"' "$cap_file" 2>/dev/null || echo unknown)"
+    fi
+  fi
   {
     echo "============================================================"
     echo "RTX3090 OLLAMA TEST+MONITOR SUMMARY"
     echo "Run ID  : $RUN_ID"
     echo "Model   : $MODEL"
+    echo "Role    : $model_role"
+    echo "Mode    : $model_mode"
     echo "API     : $BASE_URL"
     echo "Status  : test_exit_code=$TEST_RC"
     if [[ -n "$test_csv" && -f "$test_csv" ]]; then
-      awk -F',' '
+      awk -F',' -v minfill=35 '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
+        function col(n){return (h[n] ? unq($(h[n])) : "")}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-        {rows++; cat=unq($(h["category"])); mode=unq($(h["mode"])); conc=unq($(h["concurrency"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"]))+0; load=unq($(h["load_s"]))+0; resp=unq($(h["response_chars"]))+0; think=unq($(h["thinking_chars"]))+0; pe=unq($(h["prompt_eval_tokens"]))+0; ctx=unq($(h["num_ctx"]))+0; fill=unq($(h["context_fill_pct"]))+0; if(err!="") errors++; if(resp>0)visible++; if(resp==0&&think>0)thinkonly++; if(cat=="sanity" && load>cold)cold=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warmn++; warmsum+=gen; if(warmn==1||gen>wmax)wmax=gen; if(warmn==1||gen<wmin)wmin=gen}; if(cat=="longctx"){longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
-        END{status=(errors>0?"FAIL":((thinkonly>0||longfill<35)?"PASS_WITH_WARNINGS":"PASS")); printf "Test    : %s\n", status; if(warmn>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs\n", cold; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", longpe, longctx, longfill, longgen, (longfill>=35?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, thinkonly, errors}' "$test_csv"
+        {
+          rows++; cat=col("category"); mode=col("mode"); conc=col("concurrency"); err=col("error"); gen=col("gen_tps")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; endpoint=col("endpoint");
+          if(err!="") errors++;
+          if(mode=="EMBED" || endpoint=="/api/embed" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(err=="") embed_ok++; if(cat=="embedding_longctx"){elong_seen=1; elong_err=err; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}}
+          else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>cold)cold=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warmn++; warmsum+=gen; if(warmn==1||gen>wmax)wmax=gen; if(warmn==1||gen<wmin)wmin=gen}; if(cat=="longctx"){long_seen=1; long_err=err; longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
+        }
+        END{
+          status=(errors>0?"FAIL":((thinkonly>0||longfill<35&&gen_rows>0)?"PASS_WITH_WARNINGS":"PASS")); printf "Test    : %s\n", status;
+          if(embed_rows>0 && gen_rows==0){
+            if(embed_tps_n>0) printf "Embed   : vectors=%d dim=%d rows=%d ok=%d avg=%.2f embeds/s\n", embed_vectors, embed_dim, embed_rows, embed_ok, embed_tps_sum/embed_tps_n; else printf "Embed   : vectors=%d dim=%d rows=%d ok=%d\n", embed_vectors, embed_dim, embed_rows, embed_ok;
+            if(elong_seen && elong_err=="") printf "LongEmb : prompt_tokens=%d ctx=%d fill=%.1f%% %s\n", elong_pe, elong_ctx, elong_fill, (elong_fill>=minfill?"OK":"UNDERFILLED"); else if(elong_seen) print "LongEmb : N/A; request failed before prompt evaluation"; else print "LongEmb : N/A; embedding long-context row not run";
+            printf "Output  : embedding rows %d/%d; errors %d\n", embed_ok, embed_rows, errors;
+            if(errors==0) print "Inference: PASS; completed embedding benchmark"; else print "Inference: INCONCLUSIVE; embedding benchmark did not complete cleanly";
+          } else {
+            if(warmn>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Warm    : no valid warm single GPU rows";
+            printf "Cold    : first-load %.2fs\n", cold;
+            if(long_seen && long_err=="") printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", longpe, longctx, longfill, longgen, (longfill>=minfill?"OK":"UNDERFILLED"); else if(long_seen) print "LongCtx : N/A; request failed before prompt evaluation"; else print "LongCtx : N/A; long-context row not run";
+            printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, thinkonly, errors;
+            if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
+          }
+        }' "$test_csv"
     else
       echo "Perf    : test CSV not found"
+      echo "Inference: NOT TESTED; test CSV not found"
     fi
     if [[ -n "$hint_file" && -f "$hint_file" ]] && ! grep -q '^primary_error_class=none$' "$hint_file"; then
       awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$hint_file" | head -5
     fi
     if [[ "$TEST_RC" -ne 0 ]]; then
-      echo "Verdict : inference-health INCONCLUSIVE; monitor telemetry is not a completed-model-load benchmark"
+      echo "Verdict : benchmark INCONCLUSIVE; monitor telemetry is not a completed-model-load benchmark"
     fi
     if [[ -n "$conc_csv" && -f "$conc_csv" ]]; then
       awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); return s} NR==2{printf "Conc    : x%s aggregate %.2f tok/s over %.2fs; ok=%s err=%s\n", unq($2), unq($6)+0, unq($3)+0, unq($7), unq($8)}' "$conc_csv"
@@ -338,17 +379,18 @@ make_terminal_summary() {
         function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
         function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
         NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
-        {n++; name=raw("name"); util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
-        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Health  : %s; GPU samples %d avg-util %.1f%% max-util %.0f%%\n", verdict, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw=%d sw_power=%d lowclk_obs=%d memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$monitor_csv"
+        {n++; util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
+        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Telemetry: %s; GPU samples %d avg-util %.1f%% max-util %.0f%%\n", verdict, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw=%d sw_power=%d lowclk_obs=%d memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$monitor_csv"
     else
-      echo "GPU     : monitor CSV not found"
+      echo "Telemetry: monitor CSV not found"
     fi
     echo "Tests:"
     if [[ -n "$test_csv" && -f "$test_csv" ]]; then
       awk -F',' '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
+        function col(n){return (h[n] ? unq($(h[n])) : "")}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-        NR<=11{test=unq($(h["test"])); cat=unq($(h["category"])); ctx=unq($(h["num_ctx"])); prompt=unq($(h["prompt_eval_tokens"])); gen=unq($(h["gen_tps"])); done=unq($(h["done_reason"])); http=unq($(h["http_code"])); cls=unq($(h["error_class"])); if(gen!="")gen=sprintf("%.2f",gen); suffix=(cls!=""?"http="http" "cls:done); printf "  %-18s %-10s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, ctx, prompt, gen, suffix}
+        NR<=11{test=col("test"); cat=col("category"); ctx=col("num_ctx"); prompt=col("prompt_eval_tokens"); gen=col("gen_tps"); done=col("done_reason"); http=col("http_code"); cls=col("error_class"); vec=col("vector_count"); dim=col("vector_dim"); mode=col("mode"); if(gen!="")gen=sprintf("%.2f",gen); suffix=(cls!=""?"http="http" "cls:done); if(mode=="EMBED"||cat~/^embedding/) printf "  %-18s %-16s ctx=%-5s prompt=%-5s vec=%-4s dim=%-5s %s\n", test, cat, ctx, prompt, vec, dim, suffix; else printf "  %-18s %-10s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, ctx, prompt, gen, suffix}
         NR==12{print "  ... additional rows omitted; see summary.csv"}' "$test_csv"
     fi
     echo "Files:"
@@ -449,7 +491,7 @@ select_or_explain_model "$MODEL"
 log "ollama-test-and-monitor-RTX3090.sh v$VERSION"
 log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
-log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
+log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK embedding=$EMBEDDING_MODE full_model_show=$FULL_MODEL_SHOW ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 log "Monitor: interval=${INTERVAL}s profile=$MONITOR_PROFILE"
 log "Capturing NVIDIA start snapshot..."
 capture_nvidia_boundary start || true
@@ -467,6 +509,8 @@ TEST_ARGS=(
   --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT"
   --no-terminal-summary --no-zip --no-ensure-server --server-log-lines "$SERVER_LOG_LINES"
 )
+[[ "$EMBEDDING_MODE" == "1" ]] && TEST_ARGS+=(--embedding)
+[[ "$FULL_MODEL_SHOW" == "1" ]] && TEST_ARGS+=(--full-model-show)
 [[ -n "$VRAM_MODEL" ]] && TEST_ARGS+=(--vram-model "$VRAM_MODEL")
 [[ "$CAPTURE_WSL_DIAGNOSTICS" == "1" ]] || TEST_ARGS+=(--no-wsl-diagnostics)
 [[ "$RUN_CONC" == "1" ]] && TEST_ARGS+=(--run-conc) || TEST_ARGS+=(--no-conc)

@@ -73,6 +73,69 @@ ollama_curl_generate() {
 }
 
 
+ollama_curl_embed() {
+  local timeout_sec="$1" connect_timeout_sec="$2" payload_file="$3" raw_file="$4" http_file="$5" stderr_file="$6" base_url="$7"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 10s "$timeout_sec" curl -sS --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$base_url/api/embed" >"$http_file" 2>"$stderr_file"
+  else
+    curl -sS --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$base_url/api/embed" >"$http_file" 2>"$stderr_file"
+  fi
+}
+
+ollama_api_show_json() {
+  local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" model="${2:-}" timeout_s="${3:-5}" verbose="${4:-false}"
+  [[ -n "$model" ]] || return 2
+  jq -nc --arg model "$model" --argjson verbose "$verbose" '{model:$model, verbose:$verbose}'     | ollama_timeout_cmd "${timeout_s}s" curl -fsS --connect-timeout "$timeout_s" --max-time "$timeout_s" -H 'Content-Type: application/json' -d @- "$base_url/api/show" 2>/dev/null
+}
+
+ollama_model_role_from_show_json() {
+  jq -r '
+    def lcaps: [(.capabilities // [])[] | ascii_downcase];
+    def hascap($c): (lcaps | index($c)) != null;
+    def arch: ((.model_info["general.architecture"] // "") | ascii_downcase);
+    if ((hascap("embedding") or (.model_info["bert.embedding_length"] != null) or (arch == "bert"))
+        and ((hascap("completion") | not) and (hascap("generate") | not) and (hascap("chat") | not))) then
+      "embedding"
+    elif (hascap("completion") or hascap("generate") or hascap("chat") or hascap("vision") or hascap("tools")) then
+      "generate"
+    elif ((.capabilities // []) | length) == 0 then
+      "unknown"
+    else
+      "generate"
+    end
+  ' 2>/dev/null
+}
+
+ollama_model_role_common() {
+  local model="${1:-}" base_url="${2:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" timeout_s="${3:-5}" show
+  [[ -n "$model" ]] || { printf 'unknown
+'; return 2; }
+  show="$(ollama_api_show_json "$base_url" "$model" "$timeout_s" false 2>/dev/null || true)"
+  if [[ -z "$show" ]]; then printf 'unknown
+'; return 0; fi
+  printf '%s
+' "$show" | ollama_model_role_from_show_json
+}
+
+ollama_model_show_slim() {
+  local model="${1:-}"
+  jq --arg model "$model" '{
+    model: (.model // $model),
+    capabilities: (.capabilities // []),
+    details: (.details // {}),
+    architecture: (.model_info["general.architecture"] // null),
+    context_length: (.model_info["llama.context_length"] // .model_info["bert.context_length"] // .model_info["gemma3.context_length"] // .model_info["qwen2.context_length"] // .model_info["mpt.context_length"] // null),
+    embedding_length: (.model_info["bert.embedding_length"] // .model_info["llama.embedding_length"] // .model_info["general.embedding_length"] // null),
+    parameter_count: (.model_info["general.parameter_count"] // null),
+    quantization_version: (.model_info["general.quantization_version"] // null)
+  }' 2>/dev/null
+}
+
+ollama_model_role_is_embedding_only() {
+  local role="${1:-unknown}"
+  [[ "$role" == "embedding" ]]
+}
+
 ollama_timeout_cmd() {
   local seconds="${1:-3}"; shift || true
   if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
@@ -232,28 +295,65 @@ ollama_resolve_model_common() {
 }
 
 ollama_command_for_model() {
-  local script_cmd="${1:-ollama-test-and-monitor-RTX3090.sh}" model="${2:-}"
-  printf '%s %q\n' "$script_cmd" "$model"
+  local script_cmd="${1:-ollama-test-and-monitor-RTX3090.sh}" model="${2:-}" role="${3:-generate}" cmd
+  if [[ "$role" == "embedding" ]]; then
+    case "$script_cmd" in
+      "ollama test"|ollama\ test) cmd="ollama embed-test" ;;
+      *ollama-test-and-monitor-RTX3090.sh*) cmd="$script_cmd"; printf '%s %q --embedding
+' "$cmd" "$model"; return 0 ;;
+      *) cmd="$script_cmd"; printf '%s %q --embedding
+' "$cmd" "$model"; return 0 ;;
+    esac
+    printf '%s %q
+' "$cmd" "$model"
+  else
+    printf '%s %q
+' "$script_cmd" "$model"
+  fi
 }
 
 ollama_print_model_commands() {
-  local script_cmd="${1:-ollama-test-and-monitor-RTX3090.sh}" models="${2:-}" prefix="${3:-  - }" model
+  local script_cmd="${1:-ollama-test-and-monitor-RTX3090.sh}" models="${2:-}" prefix="${3:-  - }" base_url="${4:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" timeout_s="${5:-5}" model role
   if [[ -z "$models" ]]; then
     echo "  (none detected)"
     return 0
   fi
   while IFS= read -r model; do
     [[ -n "$model" ]] || continue
-    printf '%s%s  ->  ' "$prefix" "$model"
-    ollama_command_for_model "$script_cmd" "$model"
+    role="$(ollama_model_role_common "$model" "$base_url" "$timeout_s" 2>/dev/null || printf 'unknown')"
+    printf '%s%s  role=%s  ->  ' "$prefix" "$model" "$role"
+    ollama_command_for_model "$script_cmd" "$model" "$role"
   done <<<"$models"
 }
 
 ollama_print_available_model_commands() {
-  local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" script_cmd="${2:-ollama-test-and-monitor-RTX3090.sh}" timeout_s="${3:-5}" names
-  names="$(ollama_model_names_common "$base_url" "$timeout_s" 2>/dev/null || true)"
+  local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" script_cmd="${2:-ollama-test-and-monitor-RTX3090.sh}" timeout_s="${3:-5}" tags names model role size_bytes size_gib cmd
+  tags="$(ollama_tags_json "$base_url" "$timeout_s" 2>/dev/null || true)"
+  names="$(printf '%s
+' "$tags" | jq -r '.models[]? | (.name // .model // empty)' 2>/dev/null | awk 'NF' | sort -u || true)"
   echo "Available local Ollama models at $base_url:"
-  ollama_print_model_commands "$script_cmd" "$names" "  - "
+  if [[ -z "$names" ]]; then
+    echo "  (none detected)"
+    return 0
+  fi
+  printf '  %-32s %-10s %-8s %s
+' "MODEL" "ROLE" "SIZE" "SUGGESTED COMMAND"
+  printf '  %-32s %-10s %-8s %s
+' "-----" "----" "----" "-----------------"
+  while IFS= read -r model; do
+    [[ -n "$model" ]] || continue
+    role="$(ollama_model_role_common "$model" "$base_url" "$timeout_s" 2>/dev/null || printf 'unknown')"
+    size_bytes="$(printf '%s
+' "$tags" | jq -r --arg m "$model" '.models[]? | select((.name // .model)==$m or .model==$m or .name==$m) | (.size // empty)' 2>/dev/null | head -1)"
+    if [[ -n "$size_bytes" && "$size_bytes" =~ ^[0-9]+$ ]]; then
+      size_gib="$(awk -v b="$size_bytes" 'BEGIN{printf "%.1fGB", b/1000000000}')"
+    else
+      size_gib="n/a"
+    fi
+    cmd="$(ollama_command_for_model "$script_cmd" "$model" "$role")"
+    printf '  %-32s %-10s %-8s %s
+' "$model" "$role" "$size_gib" "$cmd"
+  done <<<"$names"
 }
 
 ollama_status_short_common() {
