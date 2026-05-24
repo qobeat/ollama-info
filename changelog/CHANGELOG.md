@@ -1,3 +1,13 @@
+# v1.4.0 - production README and safe default baseline
+
+- Reworked README into a production-grade project document covering functionality, architecture, script status, artifact layout, operations, and troubleshooting.
+- Changed default baseline to single-request mode: `RUN_CONC=0`, `CONCURRENCY=1`.
+- Normal command is now `ollama test qwen3.6`; previous `--no-conc --concurrency 1` flags are no longer needed.
+- Added `--stress` shorthand for `--run-conc --concurrency 2`.
+- Updated short help text to distinguish baseline and stress runs.
+- Updated `ollama models` UX through `.bashrc` so suggested commands use `ollama test <model>`.
+- Added `OLLAMA_MODEL_COMMAND` override to `ollama-status --models`.
+
 # v1.3.0 - timestamped logs, clean error hints, NVIDIA snapshots, package reorg
 
 - Moved executable scripts into `scripts/`.

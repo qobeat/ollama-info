@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.3.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.3.0-timestamped-clean-errors-nvidia-snapshots-reorg"
+VERSION="1.4.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -20,8 +20,8 @@ TEMPERATURE="${TEMPERATURE:-0.2}"
 KEEP_ALIVE="${KEEP_ALIVE:-30m}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 CONNECT_TIMEOUT_SEC="${CONNECT_TIMEOUT_SEC:-5}"
-RUN_CONC="${RUN_CONC:-1}"
-CONCURRENCY="${CONCURRENCY:-2}"
+RUN_CONC="${RUN_CONC:-0}"
+CONCURRENCY="${CONCURRENCY:-1}"
 RUN_CPU="${RUN_CPU:-0}"
 SOAK_MINUTES="${SOAK_MINUTES:-0}"
 SOAK_NUM_PREDICT="${SOAK_NUM_PREDICT:-512}"
@@ -99,6 +99,7 @@ Core options:
   --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots
 
 Optional probes:
+  --stress                  Enable common RTX stress profile: --run-conc --concurrency 2
   --run-conc / --no-conc    Enable/disable concurrency probe (default: $RUN_CONC)
   --run-cpu / --no-cpu      Enable/disable CPU-only comparison (default: $RUN_CPU)
   --soak-minutes N          Optional repeated GPU generation soak duration; 0 disables (default: $SOAK_MINUTES)
@@ -123,7 +124,8 @@ short_usage() {
 ollama-test-RTX3090.sh v$VERSION
 Usage: $(script_display_cmd) <model-pattern> [options]
 Example: $(script_display_cmd) qwen3.6
-Safe first run: $(script_display_cmd) qwen3.6 --no-conc --concurrency 1
+Baseline run: $(script_display_cmd) qwen3.6
+Stress run:   $(script_display_cmd) qwen3.6 --stress
 Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
 Use -h for full options.
 EOF_SHORT
@@ -204,6 +206,7 @@ while [[ $# -gt 0 ]]; do
     --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
     --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
+    --stress) RUN_CONC=1; [[ "$CONCURRENCY" -lt 2 ]] && CONCURRENCY=2; shift ;;
     --run-conc) RUN_CONC=1; shift ;;
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;

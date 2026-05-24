@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.2.0"
+VERSION="1.4.0"
 SCRIPT_SIGNATURE="OLLAMA_DOWNLOAD_SCRIPT_SIGNATURE=v1.2.0-one-arg-source-aria2-systemd"
 
 METHOD="${METHOD:-auto}"

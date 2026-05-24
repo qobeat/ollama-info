@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.3.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.3.0-timestamped-clean-errors-nvidia-snapshots-reorg"
+VERSION="1.4.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -17,8 +17,8 @@ LONG_CTX="${LONG_CTX:-8192}"
 NUM_PREDICT="${NUM_PREDICT:-512}"
 LONG_NUM_PREDICT="${LONG_NUM_PREDICT:-1024}"
 LONG_PROMPT_WORDS="${LONG_PROMPT_WORDS:-3200}"
-CONCURRENCY="${CONCURRENCY:-2}"
-RUN_CONC="${RUN_CONC:-1}"
+CONCURRENCY="${CONCURRENCY:-1}"
+RUN_CONC="${RUN_CONC:-0}"
 RUN_CPU="${RUN_CPU:-0}"
 SOAK_MINUTES="${SOAK_MINUTES:-0}"
 SOAK_NUM_PREDICT="${SOAK_NUM_PREDICT:-512}"
@@ -71,6 +71,7 @@ Model selection:
   Full help is shown only with -h or --help.
 
 Defaults for RTX 3090 baseline:
+  Safe single-request baseline: concurrency probe disabled by default.
   monitor-profile=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT
   long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK
 
@@ -92,6 +93,7 @@ Core options:
   --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots in test artifacts
 
 Optional probes:
+  --stress                  Enable common RTX stress profile: --run-conc --concurrency 2
   --run-conc / --no-conc    Enable/disable concurrency probe (default: $RUN_CONC)
   --run-cpu / --no-cpu      Enable/disable CPU comparison (default: $RUN_CPU)
   --soak-minutes N          Optional soak duration; 0 disables (default: $SOAK_MINUTES)
@@ -116,7 +118,8 @@ short_usage() {
 ollama-test-and-monitor-RTX3090.sh v$VERSION
 Usage: $(script_display_cmd) <model-pattern> [options]
 Example: $(script_display_cmd) qwen3.6
-Safe first run: $(script_display_cmd) qwen3.6 --no-conc --concurrency 1
+Baseline run: $(script_display_cmd) qwen3.6
+Stress run:   $(script_display_cmd) qwen3.6 --stress
 Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
 Use -h for full options.
 EOF_SHORT
@@ -198,6 +201,7 @@ while [[ $# -gt 0 ]]; do
     --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
     --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
+    --stress) RUN_CONC=1; [[ "$CONCURRENCY" -lt 2 ]] && CONCURRENCY=2; shift ;;
     --run-conc) RUN_CONC=1; shift ;;
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;

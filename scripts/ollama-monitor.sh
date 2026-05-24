@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.3.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.3.0-timestamped-console"
+VERSION="1.4.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.4.0-production-readme-safe-baseline"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
