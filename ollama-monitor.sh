@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.6.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.6.0-rtx3090-zip-terminal-summary"
+VERSION="0.7.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.7.0-rtx3090-enhanced-diagnostics"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -12,6 +12,7 @@ OUT_DIR="${OUT_DIR:-$HOME/log/ollama-monitor}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 SNAPSHOT_EVERY="${SNAPSHOT_EVERY:-5}"
+SNAPSHOT_EVERY_PROVIDED="${SNAPSHOT_EVERY_PROVIDED:-0}"
 ZIP_ON_EXIT="${ZIP_ON_EXIT:-1}"
 
 TEMP_WARN="${TEMP_WARN:-83}"
@@ -33,6 +34,9 @@ OLLAMA_PS_FILE="$RUN_DIR/ollama-ps.txt"
 OLLAMA_API_PS_FILE="$RUN_DIR/ollama-api-ps.jsonl"
 PROCESSES_FILE="$RUN_DIR/processes.tsv"
 COMPUTE_APPS_FILE="$RUN_DIR/nvidia-compute-apps.csv"
+NVIDIA_Q_START="$RUN_DIR/nvidia-smi-q-start.txt"
+NVIDIA_Q_END="$RUN_DIR/nvidia-smi-q-end.txt"
+DMESG_GPU_FILE="$RUN_DIR/dmesg-gpu-errors.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
 ARCHIVE_PATH=""
 STOP_REASON="completed"
@@ -70,7 +74,7 @@ Useful env thresholds:
 Outputs per run:
   $RUN_DIR/
     gpu.csv, report.md, meta.txt, ollama-ps.txt, ollama-api-ps.jsonl,
-    processes.tsv, nvidia-compute-apps.csv, errors.log, archive.path
+    processes.tsv, nvidia-compute-apps.csv, nvidia-smi-q-start.txt, nvidia-smi-q-end.txt, dmesg-gpu-errors.txt, errors.log, archive.path
 EOF_USAGE
 }
 
@@ -87,7 +91,7 @@ while [[ $# -gt 0 ]]; do
     --out-dir) OUT_DIR="${2:-}"; shift 2 ;;
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
     --base-url) BASE_URL="${2:-}"; shift 2 ;;
-    --snapshot-every) SNAPSHOT_EVERY="${2:-}"; shift 2 ;;
+    --snapshot-every) SNAPSHOT_EVERY="${2:-}"; SNAPSHOT_EVERY_PROVIDED=1; shift 2 ;;
     --zip) ZIP_ON_EXIT=1; shift ;;
     --no-zip) ZIP_ON_EXIT=0; shift ;;
     --self-test) SELF_TEST=1; shift ;;
@@ -103,7 +107,7 @@ is_uint "$SNAPSHOT_EVERY" || { echo "ERROR: --snapshot-every must be an integer"
 [[ "$SNAPSHOT_EVERY" -ge 1 ]] || SNAPSHOT_EVERY=1
 
 case "$PROFILE" in
-  brief) SNAPSHOT_EVERY="${SNAPSHOT_EVERY:-10}" ;;
+  brief) if [[ "$SNAPSHOT_EVERY_PROVIDED" != "1" ]]; then SNAPSHOT_EVERY=10; fi ;;
   normal|deep) ;;
   *) echo "ERROR: --profile must be brief, normal, or deep" >&2; exit 2 ;;
 esac
@@ -117,6 +121,9 @@ OLLAMA_PS_FILE="$RUN_DIR/ollama-ps.txt"
 OLLAMA_API_PS_FILE="$RUN_DIR/ollama-api-ps.jsonl"
 PROCESSES_FILE="$RUN_DIR/processes.tsv"
 COMPUTE_APPS_FILE="$RUN_DIR/nvidia-compute-apps.csv"
+NVIDIA_Q_START="$RUN_DIR/nvidia-smi-q-start.txt"
+NVIDIA_Q_END="$RUN_DIR/nvidia-smi-q-end.txt"
+DMESG_GPU_FILE="$RUN_DIR/dmesg-gpu-errors.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
 mkdir -p "$RUN_DIR" "$TMP_DIR"
 : >"$ERRORS_FILE"
@@ -248,6 +255,34 @@ snapshot_runtime() {
   fi
 }
 
+
+
+capture_static_snapshot() {
+  local label="$1" out
+  case "$label" in
+    start) out="$NVIDIA_Q_START" ;;
+    end) out="$NVIDIA_Q_END" ;;
+    *) out="$RUN_DIR/nvidia-smi-q-$label.txt" ;;
+  esac
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi -q -d POWER,TEMPERATURE,CLOCK,PERFORMANCE,PCI,MEMORY,UTILIZATION >"$out" 2>&1 || true
+  else
+    echo "nvidia-smi not found" >"$out"
+  fi
+}
+
+capture_gpu_error_scan() {
+  {
+    echo "# dmesg GPU/error scan"
+    echo "timestamp=$(date -Is)"
+    if command -v dmesg >/dev/null 2>&1; then
+      dmesg -T 2>&1 | grep -Ei 'nvrm|xid|cuda|gpu|dxg|wsl|nvidia' || true
+    else
+      echo "dmesg not found"
+    fi
+  } >"$DMESG_GPU_FILE"
+}
+
 make_archive() {
   [[ "$ZIP_ON_EXIT" == "1" ]] || return 0
   mkdir -p "$TMP_DIR"
@@ -256,10 +291,8 @@ make_archive() {
   rm -f "$ARCHIVE_PATH"
   if command -v zip >/dev/null 2>&1; then
     (cd "$OUT_DIR" && zip -qr "$ARCHIVE_PATH" "$(basename "$RUN_DIR")")
-  elif command -v python3 >/dev/null 2>&1; then
-    (cd "$OUT_DIR" && python3 -m zipfile -c "$ARCHIVE_PATH" "$(basename "$RUN_DIR")")
   else
-    warn "zip and python3 are missing; cannot create archive"
+    warn "zip is missing; cannot create archive"
     return 0
   fi
 }
@@ -285,6 +318,18 @@ generate_report() {
     echo "- temp_spike_c: $TEMP_SPIKE"
     echo "- power_spike_w: $POWER_SPIKE"
     echo "- vram_warn_pct: $VRAM_WARN_PCT"
+    echo
+
+    echo "## Diagnostic verdicts"
+    awk -F',' \
+      -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
+      function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
+      function raw(name, pos){pos=idx[name]; if(pos=="" || pos<1 || pos>NF) return ""; return trim($pos)}
+      function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
+      function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
+      NR==1{for(i=1;i<=NF;i++)idx[trim($i)]=i; next}
+      {n++; gpu=num("gpu_util_pct"); temp=num("temp_c"); memtemp=raw("mem_temp_c"); vram=num("vram_used_mib"); total=num("vram_total_mib"); power=num("power_w"); pcie=num("pcie_width_current"); pmax=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(total>0 && vram>0){last_total=total; if(vram>max_vram)max_vram=vram}; if(memtemp=="" || memtemp=="N/A") memtemp_missing++; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0 && 100*vram/total>=vram_warn)vh++; if(active(hw)) hwc++; if(active(sw)) swc++; if(gpu>=busy_pct && pcie>0 && pmax>0 && pcie<pmax) pcie_warn++; if(gpu>=busy_pct && gfx>0 && gfx<busy_low_clock) lowclk++}
+      END{status="PASS"; if(tc>0||hwc>0)status="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)status="PASS_WITH_CHECKS"; printf "- health_verdict: %s\n", status; printf "- temperature: max=%.0fC warn_samples=%d critical_samples=%d\n", max_temp, tw, tc; printf "- power: max=%.1fW sw_power_cap_samples=%d hw_slowdown_samples=%d\n", max_power, swc, hwc; printf "- vram: max=%.0f MiB total=%.0f MiB high_samples=%d\n", max_vram, last_total, vh; printf "- pcie: busy_width_below_max_samples=%d\n", pcie_warn; printf "- low_clock_observation_samples=%d\n", lowclk; printf "- memory_temperature_unavailable_samples=%d/%d\n", memtemp_missing, n; if(memtemp_missing>0) print "- note: RTX 3090 GDDR6X memory junction temperature may be unavailable in WSL2 nvidia-smi output."}' "$CSV"
     echo
 
     awk -F',' \
@@ -432,6 +477,21 @@ generate_report() {
     tail -n 25 "$CSV" 2>/dev/null || true
     echo '```'
     echo
+    echo "## nvidia-smi -q start snapshot"
+    echo '```text'
+    sed -n '1,220p' "$NVIDIA_Q_START" 2>/dev/null || true
+    echo '```'
+    echo
+    echo "## nvidia-smi -q end snapshot"
+    echo '```text'
+    sed -n '1,220p' "$NVIDIA_Q_END" 2>/dev/null || true
+    echo '```'
+    echo
+    echo "## dmesg GPU/error scan"
+    echo '```text'
+    cat "$DMESG_GPU_FILE" 2>/dev/null || true
+    echo '```'
+    echo
     echo "## Meta snapshot"
     echo '```text'
     cat "$META" 2>/dev/null || true
@@ -447,11 +507,14 @@ make_terminal_summary() {
     echo "Run ID  : $RUN_ID"
     echo "Reason  : $STOP_REASON"
     if [[ -s "$CSV" ]]; then
-      awk -F',' '
+      awk -F',' -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
+        function raw(name, pos){pos=h[name]; if(pos=="" || pos<1 || pos>NF) return ""; return trim($pos)}
+        function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
+        function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
         NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
-        {n++; name=trim($(h["name"])); util=trim($(h["gpu_util_pct"]))+0; temp=trim($(h["temp_c"]))+0; power=trim($(h["power_w"]))+0; vram=trim($(h["vram_used_mib"]))+0; total=trim($(h["vram_total_mib"]))+0; pg=trim($(h["pcie_gen_current"])); pw=trim($(h["pcie_width_current"])); pmw=trim($(h["pcie_width_max"])); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw}
-        END{pct=(last_total?100*max_vram/last_total:0); printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW\n", max_temp, max_power; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%)\n", max_vram, last_total, pct; printf "PCIe    : gen %s; width x%s / max x%s\n", last_pg, last_pw, last_pmw}' "$CSV"
+        {n++; name=raw("name"); util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
+        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Health  : %s\n", verdict; printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw_slowdown=%d sw_power_cap=%d; lowclk_obs=%d; memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$CSV"
     else
       echo "GPU     : no CSV samples"
     fi
@@ -469,6 +532,8 @@ finish() {
   FINALIZED=1
   log ""
   log "Stopping monitor..."
+  capture_static_snapshot end || true
+  capture_gpu_error_scan || true
   if [[ "$ZIP_ON_EXIT" == "1" ]]; then
     ARCHIVE_PATH="$TMP_DIR/ollama-monitor-$RUN_ID.zip"
     printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"
@@ -494,6 +559,7 @@ run_self_test() {
 2026/05/23 18:50:03.424,0,NVIDIA GeForce RTX 3090,39,N/A,86,69,7393,24576,16934,103.85,350.00,350.00,780,780,5001,780,P3,30,3,8,3,16,Default,Enabled,N/A,0x1,Active,Not Active,Not Active,596.36,94.02.59.00.d6,00000000:BD:00.0,GPU-test,0,0
 EOF_CSV
   write_meta
+  capture_static_snapshot start || true
   snapshot_runtime || true
   finish
   grep -q "GPU telemetry summary" "$REPORT"
@@ -515,6 +581,7 @@ fi
 need_cmd nvidia-smi
 printf '%s\n' "$QUERY_HEADERS" >"$CSV"
 write_meta
+capture_static_snapshot start || true
 snapshot_runtime || true
 
 log "ollama-monitor.sh v$VERSION"

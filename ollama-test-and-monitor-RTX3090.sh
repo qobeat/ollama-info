@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.6.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v0.6.0-orchestrator-terminal-summary"
+VERSION="0.7.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v0.7.0-orchestrator-classified-summary"
 
 MODEL="${MODEL:-qwen3:8b}"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://localhost:11434}}"
@@ -15,9 +15,16 @@ NUM_CTX="${NUM_CTX:-4096}"
 LONG_CTX="${LONG_CTX:-8192}"
 NUM_PREDICT="${NUM_PREDICT:-512}"
 LONG_NUM_PREDICT="${LONG_NUM_PREDICT:-1024}"
+LONG_PROMPT_WORDS="${LONG_PROMPT_WORDS:-3200}"
 CONCURRENCY="${CONCURRENCY:-2}"
 RUN_CONC="${RUN_CONC:-1}"
 RUN_CPU="${RUN_CPU:-0}"
+SOAK_MINUTES="${SOAK_MINUTES:-0}"
+SOAK_NUM_PREDICT="${SOAK_NUM_PREDICT:-512}"
+RUN_VRAM_PRESSURE="${RUN_VRAM_PRESSURE:-0}"
+VRAM_MODEL="${VRAM_MODEL:-}"
+VRAM_CTX="${VRAM_CTX:-$LONG_CTX}"
+VRAM_NUM_PREDICT="${VRAM_NUM_PREDICT:-256}"
 PULL_IF_MISSING="${PULL_IF_MISSING:-0}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 ZIP_ON_EXIT="${ZIP_ON_EXIT:-1}"
@@ -45,26 +52,38 @@ Run RTX 3090 Ollama tests while ollama-monitor.sh captures GPU/Ollama telemetry 
 Usage:
   ./ollama-test-and-monitor-RTX3090.sh [options]
 
-Options:
-  --model NAME          Model to test (default: $MODEL)
-  --base-url URL        Ollama base URL (default: $BASE_URL)
-  --out-dir DIR         Output root (default: $OUT_DIR)
-  --run-id ID           Override run id
-  --interval N          Monitor interval seconds (default: $INTERVAL)
-  --monitor-profile P   brief|normal|deep (default: $MONITOR_PROFILE)
-  --num-ctx N           Test standard context (default: $NUM_CTX)
-  --long-ctx N          Test long context (default: $LONG_CTX)
-  --num-predict N       Test generation length (default: $NUM_PREDICT)
-  --long-num-predict N  Sustained generation length (default: $LONG_NUM_PREDICT)
-  --concurrency N       Test concurrency probe size (default: $CONCURRENCY)
-  --think VALUE         Ollama top-level think parameter: false|true|none|low|medium|high (default: $THINK)
-  --run-conc / --no-conc        Enable/disable concurrency probe (default: $RUN_CONC)
-  --run-cpu / --no-cpu          Enable/disable CPU comparison (default: $RUN_CPU)
-  --pull / --no-pull            Pull model if missing (default: $PULL_IF_MISSING)
-  --timeout-sec N       curl max time per test request (default: $TIMEOUT_SEC)
+Core options:
+  --model NAME              Model to test (default: $MODEL)
+  --base-url URL            Ollama base URL (default: $BASE_URL)
+  --out-dir DIR             Output root (default: $OUT_DIR)
+  --run-id ID               Override run id
+  --interval N              Monitor interval seconds (default: $INTERVAL)
+  --monitor-profile P       brief|normal|deep (default: $MONITOR_PROFILE)
+  --num-ctx N               Test standard context (default: $NUM_CTX)
+  --long-ctx N              Test long context (default: $LONG_CTX)
+  --num-predict N           Test generation length (default: $NUM_PREDICT)
+  --long-num-predict N      Sustained generation length (default: $LONG_NUM_PREDICT)
+  --long-prompt-words N     True long-context prompt size (default: $LONG_PROMPT_WORDS)
+  --concurrency N           Test concurrency probe size (default: $CONCURRENCY)
+  --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
+
+Optional probes:
+  --run-conc / --no-conc    Enable/disable concurrency probe (default: $RUN_CONC)
+  --run-cpu / --no-cpu      Enable/disable CPU comparison (default: $RUN_CPU)
+  --soak-minutes N          Optional soak duration; 0 disables (default: $SOAK_MINUTES)
+  --soak-num-predict N      Per-request soak generation length (default: $SOAK_NUM_PREDICT)
+  --run-vram-pressure       Enable optional VRAM-pressure probe
+  --no-vram-pressure        Disable optional VRAM-pressure probe (default)
+  --vram-model NAME         Optional larger model for VRAM pressure
+  --vram-ctx N              VRAM-pressure context (default: $VRAM_CTX)
+  --vram-num-predict N      VRAM-pressure generation length (default: $VRAM_NUM_PREDICT)
+
+Operational options:
+  --pull / --no-pull        Pull missing model(s) (default: $PULL_IF_MISSING)
+  --timeout-sec N           curl max time per test request (default: $TIMEOUT_SEC)
   --terminal-summary / --no-terminal-summary  Print <=50-line ASCII summary (default: $PRINT_TERMINAL_SUMMARY)
-  --zip / --no-zip      Create combined ~/tmp zip archive (default: $ZIP_ON_EXIT)
-  -h, --help            Show help
+  --zip / --no-zip          Create combined ~/tmp zip archive (default: $ZIP_ON_EXIT)
+  -h, --help                Show help
 EOF_USAGE
 }
 
@@ -86,12 +105,20 @@ while [[ $# -gt 0 ]]; do
     --long-ctx) LONG_CTX="${2:-}"; shift 2 ;;
     --num-predict) NUM_PREDICT="${2:-}"; shift 2 ;;
     --long-num-predict) LONG_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --long-prompt-words) LONG_PROMPT_WORDS="${2:-}"; shift 2 ;;
     --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
     --think) THINK="${2:-}"; shift 2 ;;
     --run-conc) RUN_CONC=1; shift ;;
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;
     --no-cpu) RUN_CPU=0; shift ;;
+    --soak-minutes) SOAK_MINUTES="${2:-}"; shift 2 ;;
+    --soak-num-predict) SOAK_NUM_PREDICT="${2:-}"; shift 2 ;;
+    --run-vram-pressure) RUN_VRAM_PRESSURE=1; shift ;;
+    --no-vram-pressure) RUN_VRAM_PRESSURE=0; shift ;;
+    --vram-model) VRAM_MODEL="${2:-}"; shift 2 ;;
+    --vram-ctx) VRAM_CTX="${2:-}"; shift 2 ;;
+    --vram-num-predict) VRAM_NUM_PREDICT="${2:-}"; shift 2 ;;
     --pull) PULL_IF_MISSING=1; shift ;;
     --no-pull) PULL_IF_MISSING=0; shift ;;
     --timeout-sec) TIMEOUT_SEC="${2:-}"; shift 2 ;;
@@ -104,7 +131,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for n in INTERVAL NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT CONCURRENCY TIMEOUT_SEC; do is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }; done
+for n in INTERVAL NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT TIMEOUT_SEC; do is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }; done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
 [[ "$INTERVAL" -ge 1 ]] || INTERVAL=1
 [[ "$CONCURRENCY" -ge 1 ]] || CONCURRENCY=1
@@ -133,12 +160,16 @@ ensure_server() {
   curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" >/dev/null 2>&1 || { echo "ERROR: Ollama server is not reachable at $BASE_URL" >&2; exit 3; }
 }
 
+latest_file() { find "$1" -name "$2" -type f 2>/dev/null | sort | tail -1 || true; }
+
 make_terminal_summary() {
-  local test_csv monitor_csv test_summary monitor_report
-  test_csv="$(find "$TEST_ROOT" -name summary.csv -type f | sort | tail -1 || true)"
-  monitor_csv="$(find "$MONITOR_ROOT" -name gpu.csv -type f | sort | tail -1 || true)"
-  test_summary="$(find "$TEST_ROOT" -name summary.md -type f | sort | tail -1 || true)"
-  monitor_report="$(find "$MONITOR_ROOT" -name report.md -type f | sort | tail -1 || true)"
+  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report
+  test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
+  conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
+  soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
+  monitor_csv="$(latest_file "$MONITOR_ROOT" gpu.csv)"
+  test_summary="$(latest_file "$TEST_ROOT" summary.md)"
+  monitor_report="$(latest_file "$MONITOR_ROOT" report.md)"
   {
     echo "============================================================"
     echo "RTX3090 OLLAMA TEST+MONITOR SUMMARY"
@@ -150,17 +181,26 @@ make_terminal_summary() {
       awk -F',' '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-        {rows++; mode=unq($(h["mode"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"]))+0; total=unq($(h["total_s"]))+0; load=unq($(h["load_s"]))+0; resp=unq($(h["response_chars"]))+0; think=unq($(h["thinking_chars"]))+0; if(err!="") errors++; if(mode=="GPU"&&gen>0){gpu_n++; gpu_sum+=gen; if(gpu_n==1||gen>gpu_max)gpu_max=gen; if(gpu_n==1||gen<gpu_min)gpu_min=gen}; if(resp>0)visible++; if(resp==0&&think>0)think_only++; if(load>max_load)max_load=load; if(total>max_total)max_total=total}
-        END{printf "Perf    : GPU avg %.2f tok/s, min %.2f, max %.2f, rows %d\n", (gpu_n?gpu_sum/gpu_n:0), gpu_min, gpu_max, gpu_n; printf "Output  : visible rows %d/%d; thinking-only rows %d; errors %d\n", visible, rows, think_only, errors; printf "Timing  : max total %.2fs; max load %.2fs\n", max_total, max_load}' "$test_csv"
+        {rows++; cat=unq($(h["category"])); mode=unq($(h["mode"])); conc=unq($(h["concurrency"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"]))+0; load=unq($(h["load_s"]))+0; resp=unq($(h["response_chars"]))+0; think=unq($(h["thinking_chars"]))+0; pe=unq($(h["prompt_eval_tokens"]))+0; ctx=unq($(h["num_ctx"]))+0; fill=unq($(h["context_fill_pct"]))+0; if(err!="") errors++; if(resp>0)visible++; if(resp==0&&think>0)thinkonly++; if(cat=="sanity" && load>cold)cold=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warmn++; warmsum+=gen; if(warmn==1||gen>wmax)wmax=gen; if(warmn==1||gen<wmin)wmin=gen}; if(cat=="longctx"){longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
+        END{status=(errors>0?"FAIL":((thinkonly>0||longfill<35)?"PASS_WITH_WARNINGS":"PASS")); printf "Test    : %s\n", status; if(warmn>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs\n", cold; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", longpe, longctx, longfill, longgen, (longfill>=35?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, thinkonly, errors}' "$test_csv"
     else
       echo "Perf    : test CSV not found"
     fi
+    if [[ -n "$conc_csv" && -f "$conc_csv" ]]; then
+      awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); return s} NR==2{printf "Conc    : x%s aggregate %.2f tok/s over %.2fs; ok=%s err=%s\n", unq($2), unq($6)+0, unq($3)+0, unq($7), unq($8)}' "$conc_csv"
+    fi
+    if [[ -n "$soak_csv" && -f "$soak_csv" ]]; then
+      awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); return s} NR==2{printf "Soak    : iterations=%s aggregate %.2f tok/s over %.1fs; errors=%s\n", unq($2), unq($5)+0, unq($3)+0, unq($6)}' "$soak_csv"
+    fi
     if [[ -n "$monitor_csv" && -f "$monitor_csv" ]]; then
-      awk -F',' '
+      awk -F',' -v temp_warn=83 -v temp_crit=88 -v vram_warn=90 -v busy_pct=85 -v busy_low_clock=1000 '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
+        function raw(name, pos){pos=h[name]; if(pos=="" || pos<1 || pos>NF) return ""; return trim($pos)}
+        function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
+        function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
         NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
-        {n++; name=trim($(h["name"])); util=trim($(h["gpu_util_pct"]))+0; temp=trim($(h["temp_c"]))+0; power=trim($(h["power_w"]))+0; vram=trim($(h["vram_used_mib"]))+0; total=trim($(h["vram_total_mib"]))+0; pg=trim($(h["pcie_gen_current"])); pw=trim($(h["pcie_width_current"])); pmw=trim($(h["pcie_width_max"])); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw}
-        END{pct=(last_total?100*max_vram/last_total:0); printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW\n", max_temp, max_power; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%)\n", max_vram, last_total, pct; printf "PCIe    : gen %s; width x%s / max x%s\n", last_pg, last_pw, last_pmw}' "$monitor_csv"
+        {n++; name=raw("name"); util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
+        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Health  : %s; GPU samples %d avg-util %.1f%% max-util %.0f%%\n", verdict, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw=%d sw_power=%d lowclk_obs=%d memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$monitor_csv"
     else
       echo "GPU     : monitor CSV not found"
     fi
@@ -169,7 +209,8 @@ make_terminal_summary() {
       awk -F',' '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-        {test=unq($(h["test"])); mode=unq($(h["mode"])); ctx=unq($(h["num_ctx"])); np=unq($(h["num_predict"])); gen=unq($(h["gen_tps"])); total=unq($(h["total_s"])); resp=unq($(h["response_chars"])); think=unq($(h["thinking_chars"])); done=unq($(h["done_reason"])); if(gen!="")gen=sprintf("%.2f",gen); if(total!="")total=sprintf("%.2f",total); printf "  %-18s %3s ctx=%-5s pred=%-5s gen=%6s t/s total=%7ss resp=%-4s think=%-5s %s\n", test, mode, ctx, np, gen, total, resp, think, done}' "$test_csv"
+        NR<=11{test=unq($(h["test"])); cat=unq($(h["category"])); ctx=unq($(h["num_ctx"])); prompt=unq($(h["prompt_eval_tokens"])); gen=unq($(h["gen_tps"])); done=unq($(h["done_reason"])); if(gen!="")gen=sprintf("%.2f",gen); printf "  %-18s %-10s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, ctx, prompt, gen, done}
+        NR==12{print "  ... additional rows omitted; see summary.csv"}' "$test_csv"
     fi
     echo "Files:"
     echo "  run : $RUN_DIR"
@@ -182,11 +223,13 @@ make_terminal_summary() {
 }
 
 make_summary() {
-  local test_summary monitor_report test_csv monitor_csv
-  test_summary="$(find "$TEST_ROOT" -name summary.md -type f | sort | tail -1 || true)"
-  monitor_report="$(find "$MONITOR_ROOT" -name report.md -type f | sort | tail -1 || true)"
-  test_csv="$(find "$TEST_ROOT" -name summary.csv -type f | sort | tail -1 || true)"
-  monitor_csv="$(find "$MONITOR_ROOT" -name gpu.csv -type f | sort | tail -1 || true)"
+  local test_summary monitor_report test_csv monitor_csv conc_csv soak_csv
+  test_summary="$(latest_file "$TEST_ROOT" summary.md)"
+  monitor_report="$(latest_file "$MONITOR_ROOT" report.md)"
+  test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
+  monitor_csv="$(latest_file "$MONITOR_ROOT" gpu.csv)"
+  conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
+  soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
   {
     echo "# RTX 3090 Ollama Test + Monitor Orchestrator Summary"; echo
     echo "## Run metadata"
@@ -203,6 +246,8 @@ make_summary() {
     echo "## Detailed component files"
     echo "- test summary: ${test_summary:-not found}"
     echo "- test CSV: ${test_csv:-not found}"
+    echo "- concurrency aggregate CSV: ${conc_csv:-not found}"
+    echo "- soak aggregate CSV: ${soak_csv:-not found}"
     echo "- monitor report: ${monitor_report:-not found}"
     echo "- monitor GPU CSV: ${monitor_csv:-not found}"
     echo "- monitor console: $RUN_DIR/monitor.console.log"
@@ -214,8 +259,15 @@ make_summary() {
 
 make_archive() {
   [[ "$ZIP_ON_EXIT" == "1" ]] || return 0
-  mkdir -p "$TMP_DIR"; ARCHIVE_PATH="$TMP_DIR/ollama-test-and-monitor-RTX3090-$RUN_ID.zip"; rm -f "$ARCHIVE_PATH"; printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"
-  if command -v zip >/dev/null 2>&1; then (cd "$OUT_DIR" && zip -qr "$ARCHIVE_PATH" "$(basename "$RUN_DIR")"); elif command -v python3 >/dev/null 2>&1; then (cd "$OUT_DIR" && python3 -m zipfile -c "$ARCHIVE_PATH" "$(basename "$RUN_DIR")"); else warn "zip and python3 are missing; cannot create combined archive"; fi
+  mkdir -p "$TMP_DIR"
+  ARCHIVE_PATH="$TMP_DIR/ollama-test-and-monitor-RTX3090-$RUN_ID.zip"
+  rm -f "$ARCHIVE_PATH"
+  printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$OUT_DIR" && zip -qr "$ARCHIVE_PATH" "$(basename "$RUN_DIR")")
+  else
+    warn "zip is missing; cannot create combined archive"
+  fi
 }
 
 cleanup() {
@@ -241,7 +293,7 @@ ensure_server
 log "ollama-test-and-monitor-RTX3090.sh v$VERSION"
 log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
-log "Plan: model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU"
+log "Plan: model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 log "Monitor: interval=${INTERVAL}s profile=$MONITOR_PROFILE"
 log "Starting monitor..."
 
@@ -252,11 +304,15 @@ sleep 2
 log "Running tests..."
 TEST_ARGS=(
   --model "$MODEL" --base-url "$BASE_URL" --out-dir "$TEST_ROOT" --run-id "$RUN_ID-test"
-  --num-ctx "$NUM_CTX" --long-ctx "$LONG_CTX" --num-predict "$NUM_PREDICT" --long-num-predict "$LONG_NUM_PREDICT"
-  --concurrency "$CONCURRENCY" --timeout-sec "$TIMEOUT_SEC" --think "$THINK" --no-terminal-summary --no-zip --no-ensure-server
+  --num-ctx "$NUM_CTX" --long-ctx "$LONG_CTX" --num-predict "$NUM_PREDICT" --long-num-predict "$LONG_NUM_PREDICT" --long-prompt-words "$LONG_PROMPT_WORDS"
+  --concurrency "$CONCURRENCY" --timeout-sec "$TIMEOUT_SEC" --think "$THINK" --soak-minutes "$SOAK_MINUTES" --soak-num-predict "$SOAK_NUM_PREDICT"
+  --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT"
+  --no-terminal-summary --no-zip --no-ensure-server
 )
+[[ -n "$VRAM_MODEL" ]] && TEST_ARGS+=(--vram-model "$VRAM_MODEL")
 [[ "$RUN_CONC" == "1" ]] && TEST_ARGS+=(--run-conc) || TEST_ARGS+=(--no-conc)
 [[ "$RUN_CPU" == "1" ]] && TEST_ARGS+=(--run-cpu) || TEST_ARGS+=(--no-cpu)
+[[ "$RUN_VRAM_PRESSURE" == "1" ]] && TEST_ARGS+=(--run-vram-pressure) || TEST_ARGS+=(--no-vram-pressure)
 [[ "$PULL_IF_MISSING" == "1" ]] && TEST_ARGS+=(--pull) || TEST_ARGS+=(--no-pull)
 
 set +e

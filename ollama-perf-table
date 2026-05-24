@@ -40,7 +40,14 @@ need curl
 need jq
 need timeout
 need date
-need "$SCRIPT_DIR/calc_perf_ollama_table.py"
+if [[ -x "$SCRIPT_DIR/tools/legacy/calc_perf_ollama_table.py" ]]; then
+  CALC_TABLE="$SCRIPT_DIR/tools/legacy/calc_perf_ollama_table.py"
+elif [[ -x "$SCRIPT_DIR/calc_perf_ollama_table.py" ]]; then
+  CALC_TABLE="$SCRIPT_DIR/calc_perf_ollama_table.py"
+else
+  echo "ERROR: missing calc_perf_ollama_table.py (expected tools/legacy/)" >&2
+  exit 2
+fi
 
 usage() {
   cat <<H
@@ -376,7 +383,7 @@ say "============================================================"
 say ">>> QUICK SUMMARY (from CSV)"
 say "============================================================"
 
-"$SCRIPT_DIR/calc_perf_ollama_table.py" "$CSVFILE" | tee -a "$LOGFILE"
+"$CALC_TABLE" "$CSVFILE" | tee -a "$LOGFILE"
 
 say ""
 if [[ "$RUN_CPU" == "1" ]]; then
