@@ -1,19 +1,55 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-has_systemd() { command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; }
-has_ollama_service() { has_systemd && systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'; }
+BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
 
-if has_ollama_service && [[ "${KILL_ONLY:-0}" != "1" ]]; then
-  echo "Stopping Ollama via systemd: ollama.service"
-  systemctl stop ollama || true
-else
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<EOF_HELP
+Usage: ollama-stop [--kill]
+
+Default: stop ollama.service when managed by systemd.
+--kill:  bypass systemd and terminate ollama serve/runner processes directly.
+EOF_HELP
+  exit 0
+fi
+
+if [[ "${1:-}" == "--kill" || "${KILL_ONLY:-0}" == "1" ]]; then
   echo "Stopping Ollama serve/runner processes directly"
   pkill -TERM -f "ollama runner" 2>/dev/null || true
   pkill -TERM -f "ollama serve" 2>/dev/null || true
   sleep 1
   pkill -KILL -f "ollama runner" 2>/dev/null || true
   pkill -KILL -f "ollama serve" 2>/dev/null || true
+elif ollama_system_service_exists; then
+  echo "Stopping system service: systemctl stop ollama"
+  if ! systemctl stop ollama; then
+    echo "ERROR: systemctl stop ollama failed." >&2
+    echo "Try manually: systemctl stop ollama" >&2
+    echo "Check:        systemctl status ollama --no-pager" >&2
+    exit 3
+  fi
+elif ollama_user_service_exists; then
+  echo "Stopping user service: systemctl --user stop ollama"
+  if ! systemctl --user stop ollama; then
+    echo "ERROR: systemctl --user stop ollama failed." >&2
+    echo "Try manually: systemctl --user stop ollama" >&2
+    echo "Check:        systemctl --user status ollama --no-pager" >&2
+    exit 3
+  fi
+else
+  echo "No ollama.service found; stopping direct processes"
+  pkill -TERM -f "ollama runner" 2>/dev/null || true
+  pkill -TERM -f "ollama serve" 2>/dev/null || true
 fi
 
-echo "Stopped Ollama server/runner processes if they were running."
+sleep 1
+if ollama_api_ready "$BASE_URL" 2; then
+  echo "WARN: Ollama API still responds at $BASE_URL"
+else
+  echo "Ollama API: not responding at $BASE_URL"
+fi

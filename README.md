@@ -1,4 +1,4 @@
-# ollama-info v1.0
+# ollama-info v1.1
 
 WSL2 + Ollama + NVIDIA RTX 3090 health, performance, and resumable GGUF download toolkit.
 
@@ -12,6 +12,7 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 
 ## Contents
 
+- [What changed in v1.1](#what-changed-in-v11)
 - [What changed in v1.0](#what-changed-in-v10)
 - [RTX 3090 + WSL2 setup recommendations](#rtx-3090--wsl2-setup-recommendations)
 - [What this package can and cannot prove](#what-this-package-can-and-cannot-prove)
@@ -27,6 +28,53 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 - [Legacy tools and Python](#legacy-tools-and-python)
 - [Safety](#safety)
 - [Validation and development notes](#validation-and-development-notes)
+
+## What changed in v1.1
+
+v1.1 reduces terminal noise and makes the runner safer for a systemd-managed Ollama setup.
+
+New in v1.1:
+
+- Running `ollama-test-and-monitor-RTX3090.sh` with no parameters now shows a compact screen only: short usage, Ollama service/API/GPU status, and local model run commands.
+- Full help is shown only with `-h` or `--help`.
+- If a requested model pattern is not found, the script lists available local models and copyable command lines instead of printing the full help screen.
+- If a requested model pattern is ambiguous, the script lists matching model names with exact command lines.
+- The orchestrator and direct RTX test always check Ollama API status before testing. They do not auto-start Ollama; if the API is down, they stop and print the relevant `systemctl start ollama` command.
+- Added shared `ollama-common.sh` helpers for model resolution, compact status, systemd detection, and model command printing.
+- Updated `ollama-start`, `ollama-stop`, and `ollama-status` for the current setup where Ollama runs from `ollama.service`.
+- `ollama-status --brief` / `--short` gives compact service/API/GPU status; `ollama-status --models` lists local models with benchmark commands.
+- Updated the packaged `.bashrc` to use `ollama-status --short`, systemd-compatible start/stop helpers, and no server-side Ollama tuning exports.
+
+### Default/no-argument behavior
+
+```bash
+ollama-test-and-monitor-RTX3090.sh
+```
+
+prints a compact launcher like:
+
+```text
+Usage: ollama-test-and-monitor-RTX3090.sh <model-pattern> [options]
+Ollama status: ...
+Available local Ollama models:
+  - qwen3.6:35b  ->  ollama-test-and-monitor-RTX3090.sh qwen3.6:35b
+Use -h for full options.
+```
+
+### Ollama-down behavior
+
+If the API is not reachable, tests are not started. The script prints the start command for the detected setup, for example:
+
+```bash
+systemctl start ollama
+systemctl status ollama --no-pager
+```
+
+If permission is denied on the system service, use:
+
+```bash
+sudo systemctl start ollama
+```
 
 ## What changed in v1.0
 
@@ -54,7 +102,7 @@ Resolution rules:
 1. Exact full local model name, such as `qwen3.6:35b`.
 2. Exact base name before `:`, such as `qwen3.6` matching `qwen3.6:35b`.
 3. Unique case-insensitive substring match.
-4. If no match or multiple matches exist, list models and print help.
+4. If no match or multiple matches exist, list matching/available model run commands. Full help is shown only with `-h`.
 
 Examples:
 
@@ -71,12 +119,15 @@ ollama-test-and-monitor-RTX3090.sh --model qwen3.6:35b --long-ctx 8192
 
 ### Systemd-managed Ollama helpers
 
-For your intended setup, Ollama should be configured in `ollama.service`, not tuned through `~/.bashrc`. v1.0 updates the helpers accordingly:
+For your intended setup, Ollama should be configured in `ollama.service`, not tuned through `~/.bashrc`. v1.1 keeps the helpers aligned with that setup:
 
 ```bash
-ollama-start   # prefers systemctl start ollama
-ollama-status  # shows systemd status, API status, models, disk usage, GPU status
-ollama-stop    # prefers systemctl stop ollama; set KILL_ONLY=1 for direct pkill fallback
+ollama-start          # prefers systemctl start ollama; prints short status
+ollama-status          # compact systemd/API/GPU status
+ollama-status --brief  # same compact status, explicit
+ollama-status --models # local model names with benchmark commands
+ollama-status --full   # full diagnostic status
+ollama-stop           # prefers systemctl stop ollama; set KILL_ONLY=1 for direct pkill fallback
 ```
 
 The packaged Bash profile exposes `ollama_test qwen3.6` / alias `ot qwen3.6` for the short benchmark command.
@@ -476,7 +527,7 @@ ollama-monitor.sh --self-test
 |---|---|
 | `ollama-download.sh` | Resumable GGUF download, verification, Modelfile generation, and `ollama create`. |
 | `ollama-start` | Start Ollama server if not reachable. |
-| `ollama-status` | Show server, models, loaded models, disk, GPU, and recent log state. |
+| `ollama-status` | Compact service/API/GPU status by default; use `--models` or `--full` for more detail. |
 | `ollama-stop` | Stop Ollama server/runner processes. |
 | `ollama-gen` | Small `/api/generate` wrapper. |
 | `ollama-perf`, `ollama-perf-table` | Legacy benchmark scripts retained for compatibility. |
@@ -727,7 +778,7 @@ manifest regenerated with SHA256 checksums
 unzip final package and repeat basic validation
 ```
 
-The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.9 validation details are in `VERIFY-v0.9.md`; v1.0 validation details are in `VERIFY-v1.0.md`; final v1.0 requirement status is in `REFLECTION-v1.0.md`.
+The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.9 validation details are in `VERIFY-v0.9.md`; v1.0 validation details are in `VERIFY-v1.0.md`; final v1.0 requirement status is in `REFLECTION-v1.0.md`; v1.1 validation and requirement status are in `VERIFY-v1.1.md` and `REFLECTION-v1.1.md`.
 
 ## Changelog summary
 

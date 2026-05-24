@@ -6,43 +6,54 @@ LOG_DIR="${LOG_DIR:-$HOME/log}"
 LOG_FILE="${OLLAMA_SERVE_LOG:-$LOG_DIR/ollama-serve.log}"
 WAIT_SEC="${WAIT_SEC:-15}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
 
 mkdir -p "$LOG_DIR"
 
-has_systemd() { command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; }
-has_ollama_service() { has_systemd && systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'; }
-api_ready() { curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; }
-wait_ready() { for _ in $(seq 1 "$WAIT_SEC"); do api_ready && return 0; sleep 1; done; return 1; }
+wait_ready() {
+  local i
+  for i in $(seq 1 "$WAIT_SEC"); do
+    if ollama_api_ready "$BASE_URL" 2; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
 
-if api_ready; then
-  echo "Ollama server: already running at $BASE_URL"
-elif has_ollama_service; then
-  echo "Starting Ollama via systemd: ollama.service"
-  systemctl start ollama
+if ollama_api_ready "$BASE_URL" 2; then
+  echo "Ollama API: already RUNNING at $BASE_URL"
+elif ollama_system_service_exists; then
+  echo "Starting system service: systemctl start ollama"
+  if ! systemctl start ollama; then
+    echo "ERROR: systemctl start ollama failed." >&2
+    echo "Try manually: systemctl start ollama" >&2
+    echo "Check:        systemctl status ollama --no-pager" >&2
+    exit 3
+  fi
+  wait_ready || true
+elif ollama_user_service_exists; then
+  echo "Starting user service: systemctl --user start ollama"
+  if ! systemctl --user start ollama; then
+    echo "ERROR: systemctl --user start ollama failed." >&2
+    echo "Try manually: systemctl --user start ollama" >&2
+    echo "Check:        systemctl --user status ollama --no-pager" >&2
+    exit 3
+  fi
   wait_ready || true
 else
-  command -v ollama >/dev/null 2>&1 || { echo "ERROR: ollama CLI not found and ollama.service is not available" >&2; exit 2; }
+  command -v ollama >/dev/null 2>&1 || { echo "ERROR: ollama CLI not found and no ollama.service is available" >&2; exit 2; }
   echo "Starting Ollama server with nohup fallback..."
   nohup ollama serve >"$LOG_FILE" 2>&1 &
-  pid="$!"
-  echo "Ollama serve PID: $pid"
+  echo "Ollama serve PID: $!"
   wait_ready || true
 fi
 
-if api_ready; then
-  echo "Ollama server: RUNNING at $BASE_URL"
+if ollama_api_ready "$BASE_URL" 2; then
+  ollama_status_short_common "$BASE_URL" 2
 else
-  echo "ERROR: Ollama server did not become ready at $BASE_URL" >&2
-  if has_ollama_service; then
-    echo "Try: systemctl status ollama --no-pager" >&2
-    echo "Try: journalctl -u ollama -n 120 --no-pager" >&2
-  else
-    echo "Log: $LOG_FILE" >&2
-  fi
+  echo "ERROR: Ollama API did not become ready at $BASE_URL" >&2
+  ollama_print_start_hint "$BASE_URL" >&2
   exit 3
-fi
-
-echo
-if [[ -x "$SCRIPT_DIR/ollama-status" ]]; then
-  BASE_URL="$BASE_URL" "$SCRIPT_DIR/ollama-status"
 fi

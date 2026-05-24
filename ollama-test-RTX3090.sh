@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.0.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.0.0-model-selector-preflight-wsl"
+VERSION="1.1.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.1.0-short-help-status-gated-systemd"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -76,7 +76,9 @@ Model selection:
   MODEL_PATTERN is resolved against locally available Ollama model names from /api/tags.
   Matching order is exact full name, exact base name before ':', then unique case-insensitive substring.
   Example: qwen3.6 resolves to qwen3.6:35b when that is the only local match.
-  With no MODEL_PATTERN, or with no/ambiguous match, the script lists available models and prints this help.
+  With no MODEL_PATTERN, the script prints a short dashboard, status, available models, and run commands.
+  With no/ambiguous match, it prints matching/available model run commands only.
+  Full help is shown only with -h or --help.
 
 Core options:
   --model PATTERN           Model name or pattern to resolve locally
@@ -109,11 +111,43 @@ Optional probes:
 
 Operational options:
   --pull / --no-pull        Pull missing exact model after resolution (default: $PULL_IF_MISSING)
-  --ensure-server / --no-ensure-server  Start/check Ollama server (default: $ENSURE_SERVER)
+  --ensure-server / --no-ensure-server  Accepted for compatibility; test still requires reachable Ollama API
   --terminal-summary / --no-terminal-summary  Print <=50-line ASCII terminal summary (default: $PRINT_TERMINAL_SUMMARY)
   --zip / --no-zip          Create ~/tmp archive on exit (default: $ZIP_ON_EXIT)
   -h, --help                Show help
 EOF_USAGE
+}
+
+short_usage() {
+  cat <<EOF_SHORT
+ollama-test-RTX3090.sh v$VERSION
+Usage: $(basename "$0") <model-pattern> [options]
+Example: $(basename "$0") qwen3.6
+Safe first run: $(basename "$0") qwen3.6 --no-conc --concurrency 1
+Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK
+Use -h for full options.
+EOF_SHORT
+}
+
+show_no_args_screen() {
+  short_usage
+  echo
+  ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
+  echo
+  if ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
+    ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC"
+  else
+    ollama_print_start_hint "$BASE_URL"
+  fi
+}
+
+require_ollama_ready() {
+  ollama_status_short_common "$BASE_URL" "$CONNECT_TIMEOUT_SEC" || true
+  if ! ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then
+    echo
+    ollama_print_start_hint "$BASE_URL"
+    exit 3
+  fi
 }
 
 log() { printf '%s\n' "$*"; }
@@ -165,9 +199,9 @@ while [[ $# -gt 0 ]]; do
     --zip) ZIP_ON_EXIT=1; shift ;;
     --no-zip) ZIP_ON_EXIT=0; shift ;;
     -h|--help) usage; exit 0 ;;
-    --*) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    --*) echo "ERROR: unknown argument: $1" >&2; short_usage >&2; exit 2 ;;
     *)
-      if [[ -z "$MODEL" ]]; then MODEL="$1"; shift; else echo "ERROR: unexpected extra positional argument: $1" >&2; usage >&2; exit 2; fi
+      if [[ -z "$MODEL" ]]; then MODEL="$1"; shift; else echo "ERROR: unexpected extra positional argument: $1" >&2; short_usage >&2; exit 2; fi
       ;;
   esac
 done
@@ -199,85 +233,34 @@ OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 mkdir -p "$RUN_DIR" "$RAW_DIR" "$PAYLOAD_DIR" "$TMP_DIR"
 : >"$ERRORS_FILE"
 
+SD="$(script_dir)"
+COMMON_SCRIPT="$SD/ollama-common.sh"
+[[ -r "$COMMON_SCRIPT" ]] || { echo "ERROR: missing readable $COMMON_SCRIPT" >&2; exit 2; }
+# shellcheck source=/dev/null
+source "$COMMON_SCRIPT"
+
 need_cmd curl
 need_cmd jq
 need_cmd date
 need_cmd timeout
 
+# Preflight never starts Ollama. It reports status and prints the exact start command instead.
 ensure_server() {
-  if curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" "$BASE_URL/api/tags" >/dev/null 2>&1; then return 0; fi
-  [[ "$ENSURE_SERVER" == "1" ]] || { echo "ERROR: Ollama server is not reachable at $BASE_URL" >&2; exit 3; }
-  local sd; sd="$(script_dir)"
-  if [[ -x "$sd/ollama-start" ]]; then
-    BASE_URL="$BASE_URL" "$sd/ollama-start" || true
-  elif command -v ollama >/dev/null 2>&1; then
-    mkdir -p "$HOME/log"; nohup ollama serve >"$HOME/log/ollama-serve.log" 2>&1 & sleep 3
+  if [[ "$ENSURE_SERVER" == "0" ]]; then
+    if ollama_api_ready "$BASE_URL" "$CONNECT_TIMEOUT_SEC"; then return 0; fi
   fi
-  curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" "$BASE_URL/api/tags" >/dev/null 2>&1 || {
-    echo "ERROR: Ollama server still not reachable at $BASE_URL" >&2; exit 3;
-  }
-}
-
-
-ollama_model_names() {
-  curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" 2>/dev/null | jq -r '.models[]? | (.name // .model // empty)' | awk 'NF' | sort -u
-}
-
-print_available_models() {
-  local names
-  names="$(ollama_model_names || true)"
-  echo "Available local Ollama models at $BASE_URL:"
-  if [[ -n "$names" ]]; then
-    printf '%s\n' "$names" | sed 's/^/  - /'
-  else
-    echo "  (none detected, or /api/tags did not return model names)"
-  fi
-}
-
-resolve_model_pattern() {
-  local pattern="$1"
-  local names matches
-  [[ -n "$pattern" ]] || return 2
-  names="$(ollama_model_names || true)"
-  [[ -n "$names" ]] || return 4
-
-  matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
-    BEGIN{pl=tolower(p)}
-    {n=$0; nl=tolower(n); split(n,a,":"); bl=tolower(a[1]); if(n==p || nl==pl || a[1]==p || bl==pl) print n}
-  ' | sort -u)"
-  if [[ -z "$matches" ]]; then
-    matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
-      BEGIN{pl=tolower(p)}
-      {n=$0; if(index(tolower(n),pl)>0) print n}
-    ' | sort -u)"
-  fi
-
-  local count
-  count="$(printf '%s\n' "$matches" | awk 'NF{c++} END{print c+0}')"
-  if [[ "$count" == "1" ]]; then
-    printf '%s\n' "$matches" | awk 'NF{print; exit}'
-    return 0
-  fi
-  if [[ "$count" -gt 1 ]]; then
-    echo "ERROR: model pattern '$pattern' is ambiguous. Matching local models:" >&2
-    printf '%s\n' "$matches" | sed 's/^/  - /' >&2
-    return 5
-  fi
-  return 4
+  require_ollama_ready
 }
 
 select_or_explain_model() {
-  local pattern="$1" resolved rc
+  local pattern="$1" resolved rc matches
   if [[ -z "$pattern" ]]; then
     echo "ERROR: model pattern is required." >&2
-    print_available_models >&2 || true
-    echo >&2
-    usage >&2
-    trap - EXIT INT TERM 2>/dev/null || true
+    show_no_args_screen >&2
     exit 2
   fi
   set +e
-  resolved="$(resolve_model_pattern "$pattern")"
+  resolved="$(ollama_resolve_model_common "$pattern" "$BASE_URL" "$CONNECT_TIMEOUT_SEC")"
   rc=$?
   set -e
   if [[ "$rc" == "0" && -n "$resolved" ]]; then
@@ -286,16 +269,15 @@ select_or_explain_model() {
     return 0
   fi
   if [[ "$rc" == "5" ]]; then
-    echo >&2
-    usage >&2
-    trap - EXIT INT TERM 2>/dev/null || true
+    matches="$resolved"
+    echo "ERROR: model pattern '$pattern' is ambiguous. Use one exact model name:" >&2
+    ollama_print_model_commands "$(basename "$0")" "$matches" "  - " >&2
+    echo "Use -h for full options." >&2
     exit 5
   fi
   echo "ERROR: no local Ollama model matched pattern '$pattern'." >&2
-  print_available_models >&2 || true
-  echo >&2
-  usage >&2
-  trap - EXIT INT TERM 2>/dev/null || true
+  ollama_print_available_model_commands "$BASE_URL" "$(basename "$0")" "$CONNECT_TIMEOUT_SEC" >&2 || true
+  echo "Use -h for full options." >&2
   exit 4
 }
 
@@ -840,14 +822,11 @@ make_archive() {
 }
 
 csv_header
-ensure_server
 if [[ "$NO_MODEL_ARGS" == "1" ]]; then
-  trap - EXIT INT TERM 2>/dev/null || true
-  print_available_models
-  echo
-  usage
+  show_no_args_screen
   exit 2
 fi
+ensure_server
 select_or_explain_model "$MODEL"
 ensure_model "$MODEL"
 if [[ "$RUN_VRAM_PRESSURE" == "1" ]]; then ensure_model "${VRAM_MODEL:-$MODEL}"; fi

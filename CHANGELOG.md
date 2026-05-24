@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.0
+
+- Changed no-argument behavior for `ollama-test-and-monitor-RTX3090.sh` and `ollama-test-RTX3090.sh` to show compact usage, Ollama status, and local model run commands only.
+- Kept full help behind `-h` / `--help`; unknown, missing, and ambiguous model paths no longer dump the full option list.
+- Added pre-run Ollama API gating. Tests do not auto-start Ollama; if the API is down, the scripts stop and print a systemd start/check command.
+- Added `ollama-common.sh` shared helpers for compact status, systemd detection, model resolution, and model command printing.
+- Updated `ollama-start`, `ollama-stop`, and `ollama-status` for systemd-managed `ollama.service`; `ollama-status --short` and `ollama-status --models` were added.
+- Updated packaged `.bashrc` to call `ollama-status --short` and keep Ollama server configuration out of the interactive shell.
+
+## v1.0.0
+
+- Added short model-pattern runner support, for example `ollama-test-and-monitor-RTX3090.sh qwen3.6`.
+- Added model-pattern resolution to the direct RTX test script.
+- Added reviewed WSL2 `.bashrc` candidate and systemd-oriented Ollama helper commands.
+
 ## v0.9.0
 
 - Upgraded RTX test, monitor, and orchestrator scripts to v0.9 signatures.

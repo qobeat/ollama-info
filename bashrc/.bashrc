@@ -123,63 +123,109 @@ fi
 # Defaults for day-to-day coding
 # Keep user-shell conveniences here. Keep Ollama SERVER tuning in systemd service overrides,
 # because a systemd-managed ollama.service does not inherit ~/.bashrc.
-export PATH="$HOME/bin:$PATH"
+
+# Prefer local project helpers first, then ~/bin. These checks avoid duplicate PATH entries.
+for __p in "$HOME/dev/ollama-info" "$HOME/bin"; do
+  if [ -d "$__p" ]; then
+    case ":$PATH:" in
+      *":$__p:"*) ;;
+      *) PATH="$__p:$PATH" ;;
+    esac
+  fi
+done
+unset __p
+export PATH
+
 export OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 
 # Node/NVM for local coding tools
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# --- Ollama status: RTX 3090 local AI runtime ---
+# --- Ollama helpers: systemd-compatible client-side shortcuts only ---
 __ollama_timeout() {
   local seconds="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
 }
 
-__ollama_systemd_available() {
-  command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd
+__ollama_api_ready() {
+  __ollama_timeout 2s curl -fsS "${OLLAMA_URL:-http://127.0.0.1:11434}/api/version" >/dev/null 2>&1
 }
 
-__ollama_api_url() {
-  printf '%s\n' "${OLLAMA_URL:-http://127.0.0.1:11434}"
+__ollama_have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ollama_start() {
+  if __ollama_have_cmd ollama-start; then
+    command ollama-start "$@"
+  elif command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
+    systemctl start ollama
+  else
+    mkdir -p "$HOME/log"
+    nohup ollama serve >"$HOME/log/ollama-serve.log" 2>&1 &
+  fi
+}
+
+ollama_stop() {
+  if __ollama_have_cmd ollama-stop; then
+    command ollama-stop "$@"
+  elif command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
+    systemctl stop ollama
+  else
+    pkill -TERM -f "ollama runner" 2>/dev/null || true
+    pkill -TERM -f "ollama serve" 2>/dev/null || true
+  fi
 }
 
 ollama_quick_status() {
-  local url version
-  url="$(__ollama_api_url)"
-  echo "=== Ollama quick status ==="
-  if command -v ollama >/dev/null 2>&1; then
-    echo "cli     : $(command -v ollama)"
-  else
-    echo "cli     : NOT FOUND"
-    return 1
+  if __ollama_have_cmd ollama-status; then
+    command ollama-status --short
+    return $?
   fi
 
-  if __ollama_systemd_available; then
+  echo "=== Ollama quick status ==="
+  if command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
     printf 'service : '
     systemctl is-active ollama 2>/dev/null || true
     printf 'enabled : '
     systemctl is-enabled ollama 2>/dev/null || true
   fi
-
   printf 'api     : '
-  if version="$(__ollama_timeout 1s curl -fsS "$url/api/version" 2>/dev/null)"; then
-    printf '%s %s\n' "$url" "$version"
+  if __ollama_api_ready; then
+    echo "RUNNING ${OLLAMA_URL:-http://127.0.0.1:11434}"
   else
-    printf 'NOT RESPONDING at %s\n' "$url"
+    echo "NOT RESPONDING at ${OLLAMA_URL:-http://127.0.0.1:11434}"
+    if __ollama_have_cmd ollama-start; then echo "start   : ollama-start"; else echo "start   : systemctl start ollama"; fi
   fi
-
   if command -v nvidia-smi >/dev/null 2>&1; then
     printf 'gpu     : '
-    __ollama_timeout 1s nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
-      | awk -F',' '{gsub(/^ +| +$/, "", $1); gsub(/^ +| +$/, "", $2); gsub(/^ +| +$/, "", $3); gsub(/^ +| +$/, "", $4); gsub(/^ +| +$/, "", $5); printf "%s temp=%sC vram=%s/%sMiB util=%s%%\n", $1,$2,$3,$4,$5}' \
+    __ollama_timeout 2s nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+      | awk -F',' '{for(i=1;i<=NF;i++)gsub(/^ +| +$/, "", $i); printf "%s temp=%sC vram=%s/%sMiB util=%s%%\n", $1,$2,$3,$4,$5}' \
       || echo "nvidia-smi not responding"
   fi
-  echo "commands: ollama_status | ollama_models | ollama_gpu | ollama_logs [N] | ollama_test <model-pattern>"
+}
+
+ollama_status() {
+  if __ollama_have_cmd ollama-status; then
+    command ollama-status "$@"
+  else
+    ollama_quick_status
+    echo
+    ollama ps 2>/dev/null || true
+    echo
+    ollama list 2>/dev/null || true
+  fi
 }
 
 ollama_models() {
-  ollama list
+  if __ollama_api_ready; then
+    if __ollama_have_cmd ollama-status; then command ollama-status --models; else ollama list; fi
+  else
+    echo "Ollama API is not reachable at ${OLLAMA_URL:-http://127.0.0.1:11434}."
+    echo "Start: systemctl start ollama"
+    return 3
+  fi
 }
 
 ollama_gpu() {
@@ -188,33 +234,16 @@ ollama_gpu() {
 
 ollama_logs() {
   local lines="${1:-120}"
-  if __ollama_systemd_available && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+  if command -v journalctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
     journalctl -u ollama -n "$lines" --no-pager
-  elif __ollama_systemd_available && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+  elif command -v journalctl >/dev/null 2>&1 && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
     journalctl --user -u ollama -n "$lines" --no-pager
   elif [ -f "$HOME/log/ollama-serve.log" ]; then
     tail -n "$lines" "$HOME/log/ollama-serve.log"
   else
-    echo "No known Ollama log source found. Try: systemctl status ollama"
+    echo "No known Ollama log source found. Try: systemctl status ollama --no-pager"
     return 1
   fi
-}
-
-ollama_status() {
-  echo "=== Ollama full status ==="
-  ollama_quick_status
-  echo
-  echo "Ollama CLI version:"
-  ollama --version 2>/dev/null || true
-  echo
-  echo "Loaded models / runners:"
-  ollama ps 2>/dev/null || true
-  echo
-  echo "Downloaded models:"
-  ollama list 2>/dev/null || true
-  echo
-  echo "Recent service logs:"
-  ollama_logs 40 2>/dev/null || true
 }
 
 ollama_test() {
@@ -225,10 +254,19 @@ ollama_test() {
     return 2
   fi
   shift || true
-  ollama-test-and-monitor-RTX3090.sh "$pattern" "$@"
+  if __ollama_have_cmd ollama-test-and-monitor-RTX3090.sh; then
+    command ollama-test-and-monitor-RTX3090.sh "$pattern" "$@"
+  else
+    echo "ERROR: ollama-test-and-monitor-RTX3090.sh not found in PATH"
+    echo "Add package directory to PATH or run it from ~/dev/ollama-info."
+    return 127
+  fi
 }
 
 alias os='ollama_status'
+alias oq='ollama_quick_status'
+alias ost='ollama_start'
+alias osp='ollama_stop'
 alias om='ollama_models'
 alias og='ollama_gpu'
 alias ol='ollama_logs'
