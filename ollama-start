@@ -25,10 +25,10 @@ wait_ready() {
 if ollama_api_ready "$BASE_URL" 2; then
   echo "Ollama API: already RUNNING at $BASE_URL"
 elif ollama_system_service_exists; then
-  echo "Starting system service: systemctl start ollama"
-  if ! systemctl start ollama; then
-    echo "ERROR: systemctl start ollama failed." >&2
-    echo "Try manually: systemctl start ollama" >&2
+  echo "Starting system service: sudo systemctl start ollama"
+  if ! ollama_systemctl_privileged start ollama.service; then
+    echo "ERROR: sudo/systemctl start ollama.service failed." >&2
+    echo "Try manually: sudo systemctl start ollama" >&2
     echo "Check:        systemctl status ollama --no-pager" >&2
     exit 3
   fi

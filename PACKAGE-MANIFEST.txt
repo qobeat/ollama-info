@@ -1,43 +1,40 @@
-# ollama-info v1.1 package manifest
-
-Generated for v1.1.0 short-help/status-gated/systemd package.
-
-| file | bytes | sha256 |
-|---|---:|---|
-| `CHANGELOG.md` | 4383 | `f1f542eeba8f72da9007d55d08e3d97e4dbe215e414a9902e7af417562ea8d2c` |
-| `README.md` | 28615 | `a74792ea6a9926876ad9534a51df4d9b67b93c79bf928c693631a050f60b4611` |
-| `REFLECTION-v0.5.md` | 4337 | `450bc87b83f516a1d02d0508d072dc230b744bd68e495b22367934c7d4945adb` |
-| `REFLECTION-v0.6.md` | 1307 | `254eb58097074d0e51e710b3f6a00ea517f6170fed4860330b8a3d7e8f0be36e` |
-| `REFLECTION-v0.7.md` | 2678 | `c18772f11aa9ac3fe964725b55164b48f7b0a2c33cb42e99fbc2f263c3444ae4` |
-| `REFLECTION-v0.8.md` | 1708 | `a49de40c34f4571f9dbc604022422cb06e5c932b6460620ad230fa137f13c401` |
-| `REFLECTION-v0.9.md` | 2029 | `d8fc12cd87aa75b5f47a206dad8dc328987d0e1d88b28bf85fa59c6243eaba4b` |
-| `REFLECTION-v1.0.md` | 1051 | `0fa282bdb9f4525015a490d8368dcc8be86321db5ae77bcd306fc46d7582ad34` |
-| `REFLECTION-v1.1.md` | 1163 | `c5169de3365e51c247d8285e4a0358efd8add04efd687323605c0a73f1303b8d` |
-| `REVIEW-v0.5.md` | 2875 | `2a4d4ddc3129ec1fe368173a9b15abd3e55f4a8d9af920064d5c38ece4491f5d` |
-| `REVIEW-v0.6.md` | 1414 | `1fd990a86dfcc9cb55d32eb0b107662ee30302e39647a5be6b6bd0bf8e2d3ef7` |
-| `REVIEW-v0.7.md` | 2444 | `fa465c7edbb2adb03d6b7d5f933fcd543dc0fc2d22eb0d7ae4ec20b8aec684f2` |
-| `REVIEW-v0.8.md` | 1232 | `4cffb2c64240a7984ec5e1337d76bd83bef1d6bc9b0b93aeb00bc04dc03d7e3f` |
-| `REVIEW-v0.9.md` | 2240 | `26bbf3ef595290aa83ee0c27109ae90b7519d4b27b98edce9bc5eee2416a91ce` |
-| `REVIEW-v1.0.md` | 1803 | `c00c1c4220471639435301addccc56b68ef0fd88503b13c5fe9b7d567d939b6f` |
-| `REVIEW-v1.1.md` | 2263 | `01351bcf466512c6071e896999a5f979f97d93a54eb0853ae750768c74e94b5a` |
-| `VERIFY-v0.7.md` | 3551 | `81d0c36add980926814f37aeb1040c9bfc5f4d011b9807ce28063e001ec8bde5` |
-| `VERIFY-v0.8.md` | 1662 | `ad99772d6640cc49239ffcfe90cd0b0e76913a6bebeb83df65b8ce10ce553cc3` |
-| `VERIFY-v0.9.md` | 2732 | `73f811aefb69be7de4da6a58066787cb8db499db0630825d30284a266e2ee3c4` |
-| `VERIFY-v1.0.md` | 1511 | `90ef1899c5a0f1155687a69ec20ff084a678566e56e7c5ffcb26a47c5a995a00` |
-| `VERIFY-v1.1.md` | 2412 | `d69e63d36efbcb489fe5583ac2c91899b533d3c69d2edbf2b8b83b5bc2436b29` |
-| `bashrc/.bashrc` | 9018 | `30ab7db48d278c14ac0588e0ad571f47e138760aa97fa36c21defdc601b1d30b` |
-| `bashrc/README.md` | 2641 | `aeef5fbd2541409b7394197ada026dc6fe1c6415a394442f3d1cde287fd5bbfb` |
-| `ollama-common.sh` | 6512 | `262df81d86160a7a1ef8f5d9af6b120b01b3f62747cc3daa86ea4c75ca266fe2` |
-| `ollama-download.sh` | 21451 | `e292e4ec415220fc6df6618ce877d5650a63d52e90dc84800bef8750550420b3` |
-| `ollama-gen` | 4624 | `366358864c490b26d1e990b3db2aa38bb6659d2bf147d188df26b806f230e7a7` |
-| `ollama-monitor.sh` | 33642 | `6576aae91286be3011c19253c3b02cb6e569259ac33a50d7ee06805ce00a21b4` |
-| `ollama-perf` | 13936 | `19780f3d91cdbbd05bdf919b0c825aebea56bac4815d1f7b4df76ad4f992b841` |
-| `ollama-perf-table` | 13089 | `0cef54b051b3896a5ad1aa3d4af62d394d87d4ae0ebe847ce1086e4ff193ddf6` |
-| `ollama-start` | 1950 | `7c1b725543495f242043314edcbc6d495de86b5d4baeb29269131e9d6e77b144` |
-| `ollama-status` | 3715 | `ea4e746437df54f0534b208958864ab9918369f2eacb901ae81d22f73419f243` |
-| `ollama-stop` | 1962 | `21f825549b5b2a144347225705ef20b048625dfb23924a670e435ae05bed43e1` |
-| `ollama-test-RTX3090.sh` | 49421 | `5d1f061a7248a14db52817e6a36059ecae5c4d4867bfbd1b2ac7df236f7c1a53` |
-| `ollama-test-and-monitor-RTX3090.sh` | 24241 | `2c4c9e8bb9cf93309dd9b2359a89809c85a1193746a253a5168c19f7eb57b548` |
-| `plan.txt` | 8316 | `8c7b445605c90d5683a1e559b42874f13d239a57d0be422b9318546a615a3241` |
-| `tools/legacy/calc_perf_ollama.py` | 2074 | `8a18e6c6597fc741c9a65b5d17fa56fef37ddbe853beb71b4ac9ac534e5f2be2` |
-| `tools/legacy/calc_perf_ollama_table.py` | 4941 | `25a8217c40c59d46ebeb7c7bd5740078c86429ab4b7fec11683e29bd947fd4bc` |
+644 6252 ./CHANGELOG.md
+644 31700 ./README.md
+644 4337 ./REFLECTION-v0.5.md
+644 1307 ./REFLECTION-v0.6.md
+644 2678 ./REFLECTION-v0.7.md
+644 1708 ./REFLECTION-v0.8.md
+644 2029 ./REFLECTION-v0.9.md
+644 1051 ./REFLECTION-v1.0.md
+644 1163 ./REFLECTION-v1.1.md
+644 1219 ./REFLECTION-v1.2.md
+644 2875 ./REVIEW-v0.5.md
+644 1414 ./REVIEW-v0.6.md
+644 2444 ./REVIEW-v0.7.md
+644 1232 ./REVIEW-v0.8.md
+644 2240 ./REVIEW-v0.9.md
+644 1803 ./REVIEW-v1.0.md
+644 2263 ./REVIEW-v1.1.md
+644 2572 ./REVIEW-v1.2.md
+644 3551 ./VERIFY-v0.7.md
+644 1662 ./VERIFY-v0.8.md
+644 2732 ./VERIFY-v0.9.md
+644 1511 ./VERIFY-v1.0.md
+644 2412 ./VERIFY-v1.1.md
+644 2594 ./VERIFY-v1.2.md
+644 12254 ./bashrc/.bashrc
+644 4251 ./bashrc/README.md
+644 9910 ./ollama-common.sh
+755 28293 ./ollama-download.sh
+755 4624 ./ollama-gen
+755 33642 ./ollama-monitor.sh
+755 13936 ./ollama-perf
+755 13089 ./ollama-perf-table
+755 1999 ./ollama-start
+755 3715 ./ollama-status
+755 2011 ./ollama-stop
+755 49423 ./ollama-test-RTX3090.sh
+755 24243 ./ollama-test-and-monitor-RTX3090.sh
+644 8316 ./plan.txt
+644 2074 ./tools/legacy/calc_perf_ollama.py
+644 4941 ./tools/legacy/calc_perf_ollama_table.py

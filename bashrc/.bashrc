@@ -156,11 +156,49 @@ __ollama_have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+__ollama_systemctl_available() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1
+}
+
+__ollama_system_service_exists() {
+  __ollama_systemctl_available || return 1
+  local state out
+  state="$(systemctl show -p LoadState --value ollama.service 2>/dev/null | awk 'NF{print; exit}' || true)"
+  case "$state" in
+    loaded|linked|linked-runtime|alias|generated|transient|static|indirect|enabled|disabled|masked) return 0 ;;
+  esac
+  systemctl cat ollama.service >/dev/null 2>&1 && return 0
+  out="$(systemctl list-unit-files ollama.service --no-legend --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | awk '$1=="ollama.service"{found=1} END{exit found?0:1}' && return 0
+  out="$(systemctl list-units --all ollama.service --no-legend --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | awk '$1=="ollama.service"{found=1} END{exit found?0:1}' && return 0
+  out="$(systemctl status ollama.service --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | grep -Eq '(^|[[:space:]])ollama\.service[[:space:]]+-|Loaded:[[:space:]]+loaded' && return 0
+  [ -f /etc/systemd/system/ollama.service ] && return 0
+  [ -f /usr/lib/systemd/system/ollama.service ] && return 0
+  [ -f /lib/systemd/system/ollama.service ] && return 0
+  return 1
+}
+
+__ollama_sudo_systemctl() {
+  local action="${1:-}" unit="${2:-ollama.service}"
+  if [ -z "$action" ]; then echo "ERROR: missing systemctl action" >&2; return 2; fi
+  if [ "$(id -u)" = "0" ]; then
+    systemctl "$action" "$unit"
+  elif command -v sudo >/dev/null 2>&1; then
+    echo "Privilege required: sudo systemctl $action $unit"
+    sudo -v && sudo systemctl "$action" "$unit"
+  else
+    echo "ERROR: sudo is required for: systemctl $action $unit" >&2
+    return 126
+  fi
+}
+
 ollama_start() {
   if __ollama_have_cmd ollama-start; then
     command ollama-start "$@"
-  elif command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
-    systemctl start ollama
+  elif __ollama_system_service_exists; then
+    __ollama_sudo_systemctl start ollama.service
   else
     mkdir -p "$HOME/log"
     nohup ollama serve >"$HOME/log/ollama-serve.log" 2>&1 &
@@ -170,8 +208,8 @@ ollama_start() {
 ollama_stop() {
   if __ollama_have_cmd ollama-stop; then
     command ollama-stop "$@"
-  elif command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
-    systemctl stop ollama
+  elif __ollama_system_service_exists; then
+    __ollama_sudo_systemctl stop ollama.service
   else
     pkill -TERM -f "ollama runner" 2>/dev/null || true
     pkill -TERM -f "ollama serve" 2>/dev/null || true
@@ -185,18 +223,18 @@ ollama_quick_status() {
   fi
 
   echo "=== Ollama quick status ==="
-  if command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
+  if __ollama_system_service_exists; then
     printf 'service : '
-    systemctl is-active ollama 2>/dev/null || true
+    systemctl is-active ollama.service 2>/dev/null || true
     printf 'enabled : '
-    systemctl is-enabled ollama 2>/dev/null || true
+    systemctl is-enabled ollama.service 2>/dev/null || true
   fi
   printf 'api     : '
   if __ollama_api_ready; then
     echo "RUNNING ${OLLAMA_URL:-http://127.0.0.1:11434}"
   else
     echo "NOT RESPONDING at ${OLLAMA_URL:-http://127.0.0.1:11434}"
-    if __ollama_have_cmd ollama-start; then echo "start   : ollama-start"; else echo "start   : systemctl start ollama"; fi
+    if __ollama_have_cmd ollama-start; then echo "start   : ollama-start"; elif __ollama_system_service_exists; then echo "start   : sudo systemctl start ollama"; else echo "start   : ollama serve"; fi
   fi
   if command -v nvidia-smi >/dev/null 2>&1; then
     printf 'gpu     : '
@@ -223,7 +261,7 @@ ollama_models() {
     if __ollama_have_cmd ollama-status; then command ollama-status --models; else ollama list; fi
   else
     echo "Ollama API is not reachable at ${OLLAMA_URL:-http://127.0.0.1:11434}."
-    echo "Start: systemctl start ollama"
+    if __ollama_system_service_exists; then echo "Start: sudo systemctl start ollama"; else echo "Start: ollama serve"; fi
     return 3
   fi
 }
@@ -234,7 +272,7 @@ ollama_gpu() {
 
 ollama_logs() {
   local lines="${1:-120}"
-  if command -v journalctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+  if command -v journalctl >/dev/null 2>&1 && __ollama_system_service_exists; then
     journalctl -u ollama -n "$lines" --no-pager
   elif command -v journalctl >/dev/null 2>&1 && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
     journalctl --user -u ollama -n "$lines" --no-pager
@@ -263,6 +301,24 @@ ollama_test() {
   fi
 }
 
+# Optional convenience wrapper: keeps normal Ollama CLI behavior, but adds shell-only
+# subcommands that the upstream CLI does not provide, e.g. `ollama status`.
+# Disable before sourcing this file with: export OLLAMA_BASHRC_WRAP=0
+if [ "${OLLAMA_BASHRC_WRAP:-1}" = "1" ]; then
+  ollama() {
+    case "${1:-}" in
+      status) shift; ollama_status "$@" ;;
+      start)  shift; ollama_start "$@" ;;
+      stop)   shift; ollama_stop "$@" ;;
+      models) shift; ollama_models "$@" ;;
+      logs)   shift; ollama_logs "$@" ;;
+      gpu)    shift; ollama_gpu "$@" ;;
+      test)   shift; ollama_test "$@" ;;
+      *)      command ollama "$@" ;;
+    esac
+  }
+fi
+
 alias os='ollama_status'
 alias oq='ollama_quick_status'
 alias ost='ollama_start'
@@ -271,6 +327,27 @@ alias om='ollama_models'
 alias og='ollama_gpu'
 alias ol='ollama_logs'
 alias ot='ollama_test'
+
+# Optional compatibility wrapper for the upstream Ollama CLI.
+# It makes `ollama status`, `ollama start`, `ollama stop`, etc. call the
+# local helper functions while preserving normal upstream commands such as
+# `ollama list`, `ollama pull`, `ollama run`, `ollama serve`, and `ollama ps`.
+# Disable with: export OLLAMA_BASHRC_WRAP_CLI=0
+if [ "${OLLAMA_BASHRC_WRAP_CLI:-1}" = "1" ] && __ollama_have_cmd ollama; then
+  ollama() {
+    local __sub="${1:-}"
+    case "$__sub" in
+      status) shift; ollama_status "$@" ;;
+      start)  shift; ollama_start "$@" ;;
+      stop)   shift; ollama_stop "$@" ;;
+      logs|log) shift; ollama_logs "$@" ;;
+      models) shift; ollama_models "$@" ;;
+      gpu)    shift; ollama_gpu "$@" ;;
+      test)   shift; ollama_test "$@" ;;
+      *) command ollama "$@" ;;
+    esac
+  }
+fi
 
 # Show fast status once per interactive terminal. Disable with: export OLLAMA_BASHRC_STATUS=0
 if [[ $- == *i* && "${OLLAMA_BASHRC_STATUS:-1}" == "1" && -z "${OLLAMA_STATUS_SHOWN:-}" ]]; then

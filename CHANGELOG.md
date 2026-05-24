@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.2.0
+
+- Added interactive `.bashrc` shell wrapper for `ollama status`, `ollama start`, `ollama stop`, `ollama models`, `ollama logs`, `ollama gpu`, and `ollama test ...` while preserving pass-through for normal Ollama CLI commands.
+- Hardened `.bashrc` fallback service detection with `systemctl cat/status` and unit-file path checks.
+
+- Fixed `ollama-start` and `ollama-stop` for system services that require privileged systemd actions. Non-root callers now go through `sudo systemctl start|stop ollama.service` and get the normal sudo password prompt.
+- Fixed systemd service detection by removing the hard dependency on PID 1 being named `systemd`; helpers now use `systemctl show/cat/list-unit-files/list-units/status` and correctly detect `/etc/systemd/system/ollama.service` in the observed WSL setup.
+- Updated `ollama-status --brief` to report system service load/active/enabled state more accurately.
+- Updated the packaged `.bashrc` fallback helpers for sudo-aware systemd start/stop and improved service detection.
+- Added an optional `.bashrc` compatibility wrapper so `ollama status`, `ollama start`, `ollama stop`, `ollama logs`, `ollama models`, `ollama gpu`, and `ollama test` route to package helpers while ordinary Ollama CLI subcommands still call the real CLI.
+- Simplified `ollama-download.sh`: it now accepts one positional source argument, including a Hugging Face file URL, `ORG/REPO/model.gguf` shorthand, or a local GGUF path.
+- Added automatic inference of GGUF filename, download directory, Ollama model name, and default `PARAMETER num_ctx 8192` in one-argument downloader mode.
+- Improved downloader resume behavior by skipping already-complete destination files unless `--force` is used.
+- Validated the `aria2` path with a fake `aria2c` transfer that created a GGUF file and triggered `ollama create` with the inferred model name.
+
 ## v1.1.0
 
 - Changed no-argument behavior for `ollama-test-and-monitor-RTX3090.sh` and `ollama-test-RTX3090.sh` to show compact usage, Ollama status, and local model run commands only.

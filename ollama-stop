@@ -26,10 +26,10 @@ if [[ "${1:-}" == "--kill" || "${KILL_ONLY:-0}" == "1" ]]; then
   pkill -KILL -f "ollama runner" 2>/dev/null || true
   pkill -KILL -f "ollama serve" 2>/dev/null || true
 elif ollama_system_service_exists; then
-  echo "Stopping system service: systemctl stop ollama"
-  if ! systemctl stop ollama; then
-    echo "ERROR: systemctl stop ollama failed." >&2
-    echo "Try manually: systemctl stop ollama" >&2
+  echo "Stopping system service: sudo systemctl stop ollama"
+  if ! ollama_systemctl_privileged stop ollama.service; then
+    echo "ERROR: sudo/systemctl stop ollama.service failed." >&2
+    echo "Try manually: sudo systemctl stop ollama" >&2
     echo "Check:        systemctl status ollama --no-pager" >&2
     exit 3
   fi

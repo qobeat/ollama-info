@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.1.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.1.0-short-help-status-gated-systemd"
+VERSION="1.2.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.2.0-sudo-systemd-detection-short-help"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"

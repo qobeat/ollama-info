@@ -1,4 +1,4 @@
-# ollama-info v1.1
+# ollama-info v1.2
 
 WSL2 + Ollama + NVIDIA RTX 3090 health, performance, and resumable GGUF download toolkit.
 
@@ -12,6 +12,7 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 
 ## Contents
 
+- [What changed in v1.2](#what-changed-in-v12)
 - [What changed in v1.1](#what-changed-in-v11)
 - [What changed in v1.0](#what-changed-in-v10)
 - [RTX 3090 + WSL2 setup recommendations](#rtx-3090--wsl2-setup-recommendations)
@@ -28,6 +29,56 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 - [Legacy tools and Python](#legacy-tools-and-python)
 - [Safety](#safety)
 - [Validation and development notes](#validation-and-development-notes)
+
+## What changed in v1.2
+
+v1.2 fixes the systemd privilege path and reduces the GGUF downloader to a practical one-argument workflow.
+
+New in v1.2:
+
+- Packaged `.bashrc` now includes an optional shell wrapper so `ollama status`, `ollama start`, `ollama stop`, `ollama models`, `ollama logs`, `ollama gpu`, and `ollama test ...` work as convenience aliases while normal Ollama CLI subcommands still pass through to the real binary. Disable the shell wrapper with `export OLLAMA_BASHRC_WRAP=0`.
+- `ollama-start` and `ollama-stop` now use `sudo systemctl start|stop ollama.service` when the caller is not root. They explicitly prompt through `sudo` instead of failing with `Interactive authentication required`.
+- Systemd service detection no longer depends on PID 1 being named `systemd`. The helpers now use `systemctl show/cat/list-unit-files/list-units/status` so a valid `/etc/systemd/system/ollama.service` is detected in your WSL setup.
+- `ollama-status --brief` now reports `load=loaded active=... enabled=...` for the system service when available.
+- The packaged `.bashrc` fallback helpers were updated to use the same sudo-aware systemd behavior and robust service detection.
+- The packaged `.bashrc` now optionally intercepts `ollama status`, `ollama start`, `ollama stop`, `ollama logs`, `ollama models`, `ollama gpu`, and `ollama test`; all normal upstream Ollama subcommands still pass through to the real CLI. Disable with `export OLLAMA_BASHRC_WRAP_CLI=0`.
+- `ollama-download.sh` now accepts a single positional source argument and infers the repo/file, destination path, Ollama model name, and default `num_ctx=8192`.
+- The downloader supports Hugging Face file URLs, Hugging Face shorthand `ORG/REPO/model.gguf`, and local GGUF paths.
+- `aria2` mode was tested with the simplified one-argument flow and now skips a completed destination file unless `--force` is passed.
+
+Short downloader example for your Qwen file:
+
+```bash
+ollama-download.sh --method aria2 \
+  'unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf'
+```
+
+Equivalent full URL form:
+
+```bash
+ollama-download.sh --method aria2 \
+  'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf?download=true'
+```
+
+This infers:
+
+```text
+model name: qwen3.6-35b-a3b-ud-q4km
+Modelfile:  FROM <downloaded-gguf>
+            PARAMETER num_ctx 8192
+```
+
+Use `--name`, `--num-ctx`, or `--no-create` only when overriding the defaults.
+
+Interactive shell examples after installing the packaged `.bashrc`:
+
+```bash
+ollama status       # package status helper; upstream Ollama has no native status subcommand
+ollama start        # sudo-aware systemd start helper
+ollama stop         # sudo-aware systemd stop helper
+ollama models       # local models with benchmark commands
+ollama test qwen3.6 # short RTX 3090 test+monitor launcher
+```
 
 ## What changed in v1.1
 
@@ -66,15 +117,10 @@ Use -h for full options.
 If the API is not reachable, tests are not started. The script prints the start command for the detected setup, for example:
 
 ```bash
-systemctl start ollama
+sudo systemctl start ollama
 systemctl status ollama --no-pager
 ```
 
-If permission is denied on the system service, use:
-
-```bash
-sudo systemctl start ollama
-```
 
 ## What changed in v1.0
 
@@ -119,15 +165,15 @@ ollama-test-and-monitor-RTX3090.sh --model qwen3.6:35b --long-ctx 8192
 
 ### Systemd-managed Ollama helpers
 
-For your intended setup, Ollama should be configured in `ollama.service`, not tuned through `~/.bashrc`. v1.1 keeps the helpers aligned with that setup:
+For your intended setup, Ollama should be configured in `ollama.service`, not tuned through `~/.bashrc`. v1.2 keeps the helpers aligned with that setup:
 
 ```bash
-ollama-start          # prefers systemctl start ollama; prints short status
+ollama-start          # prefers sudo systemctl start ollama when non-root; prints short status
 ollama-status          # compact systemd/API/GPU status
 ollama-status --brief  # same compact status, explicit
 ollama-status --models # local model names with benchmark commands
 ollama-status --full   # full diagnostic status
-ollama-stop           # prefers systemctl stop ollama; set KILL_ONLY=1 for direct pkill fallback
+ollama-stop           # prefers sudo systemctl stop ollama when non-root; set KILL_ONLY=1 for direct pkill fallback
 ```
 
 The packaged Bash profile exposes `ollama_test qwen3.6` / alias `ot qwen3.6` for the short benchmark command.
@@ -308,35 +354,27 @@ Optional legacy Python tools can remain inside the extracted package under `tool
 Download a large GGUF with resume support and import it into Ollama:
 
 ```bash
-ollama-download.sh \
-  --method aria2 \
-  --repo bartowski/Qwen3-32B-GGUF \
-  --file Qwen3-32B-Q4_K_M.gguf \
-  --name qwen3-32b-q4km \
-  --num-ctx 8192
+ollama-download.sh --method aria2 \
+  'unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf'
 ```
 
 For private/gated Hugging Face repos, authenticate first and use `--method hf`:
 
 ```bash
 hf auth login
-ollama-download.sh --method hf --repo ORG/REPO-GGUF --file MODEL.gguf --name local-model
+ollama-download.sh --method hf 'ORG/REPO-GGUF/MODEL.gguf'
 ```
 
 Recommended RTX 3090 validation run:
 
 ```bash
-ollama-test-and-monitor-RTX3090.sh \
-  --model qwen3:8b \
-  --interval 1 \
-  --monitor-profile deep \
-  --num-ctx 4096 \
-  --long-ctx 8192 \
-  --num-predict 512 \
-  --long-num-predict 1024 \
-  --long-prompt-words 3200 \
-  --concurrency 2 \
-  --think false
+ollama-test-and-monitor-RTX3090.sh qwen3.6
+```
+
+Conservative first run after a model rebuild/download:
+
+```bash
+ollama-test-and-monitor-RTX3090.sh qwen3.6 --no-conc --concurrency 1
 ```
 
 Screen behavior:
@@ -371,7 +409,7 @@ Recommended WSL2 practice:
 - Use `--method hf` for gated/private Hugging Face repositories after authentication.
 - Use `--sha256` when the model publisher provides a checksum.
 
-The generated Modelfile is minimal by design:
+In one-arg mode, the generated Modelfile is minimal by design:
 
 ```text
 FROM /absolute/path/to/model.gguf
@@ -389,33 +427,30 @@ Resumable GGUF downloader and Ollama importer. Use this instead of `ollama pull`
 Common examples:
 
 ```bash
-# Most explicit resume behavior for public Hugging Face GGUF files
-ollama-download.sh \
-  --method aria2 \
-  --repo bartowski/Qwen3-32B-GGUF \
-  --file Qwen3-32B-Q4_K_M.gguf \
-  --name qwen3-32b-q4km \
-  --num-ctx 8192
+# Public Hugging Face GGUF; repo/file, model name, and num_ctx are inferred
+ollama-download.sh --method aria2 \
+  'unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf'
 
-# Hugging Face CLI path; better for gated/private repos
+# Full Hugging Face file URL also works; blob URLs are converted to resolve URLs
+ollama-download.sh --method aria2 \
+  'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf?download=true'
+
+# Hugging Face CLI path; better for gated/private repos after authentication
 hf auth login
-ollama-download.sh \
-  --method hf \
-  --repo ORG/PRIVATE-GGUF \
-  --file MODEL-Q4_K_M.gguf \
-  --name private-model-q4km
+ollama-download.sh --method hf 'ORG/PRIVATE-GGUF/MODEL-Q4_K_M.gguf'
 
 # Download only; do not create an Ollama model
-ollama-download.sh --repo REPO_ID --file MODEL.gguf --no-create
+ollama-download.sh --method aria2 'ORG/REPO-GGUF/MODEL.gguf' --no-create
 
 # Import an already-downloaded local GGUF
-ollama-download.sh --local-file ~/models/gguf/model.gguf --name model-local --num-ctx 8192
+ollama-download.sh ~/models/gguf/model.gguf
 ```
 
 Important options:
 
 ```text
---repo ID               Hugging Face repo id, e.g. bartowski/Qwen3-32B-GGUF
+SOURCE                  One positional Hugging Face URL, ORG/REPO/model.gguf, or local GGUF path
+--repo ID               Hugging Face repo id, e.g. unsloth/Qwen3.6-35B-A3B-GGUF
 --file PATH             GGUF file path inside repo, or output filename for --url
 --revision REV          Hugging Face revision/branch/commit; default main
 --url URL               Direct download URL
@@ -429,10 +464,11 @@ Important options:
 --split N               aria2 split count
 --connections N         aria2 max connections per server
 --sha256 HEX            Expected SHA256
---name NAME             Ollama model name to create; if omitted, script downloads only
+--name NAME             Ollama model name; inferred from SOURCE filename in one-arg mode
 --no-create             Download/verify only
 --param KEY=VALUE       Add PARAMETER line to generated Modelfile; repeatable
---num-ctx N             Shortcut for --param num_ctx=N
+--num-ctx N             Shortcut for --param num_ctx=N; one-arg mode defaults to 8192
+--no-default-params     Do not add default num_ctx in one-arg mode
 ```
 
 Default output locations:
@@ -760,7 +796,7 @@ The scripts do not:
 - flash GPU BIOS;
 - modify Windows registry;
 - install drivers;
-- auto-download large models during diagnostics unless `--pull` is explicitly passed. `ollama-download.sh` is the intentional large-model download command and requires an explicit `--repo`/`--url`/`--local-file`.
+- auto-download large models during diagnostics unless `--pull` is explicitly passed. `ollama-download.sh` is the intentional large-model download command and requires an explicit source argument, `--repo`/`--file`, `--url`, or `--local-file`.
 
 CPU tests are off by default because they can be slow and may force model reloads.
 
@@ -778,7 +814,7 @@ manifest regenerated with SHA256 checksums
 unzip final package and repeat basic validation
 ```
 
-The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.9 validation details are in `VERIFY-v0.9.md`; v1.0 validation details are in `VERIFY-v1.0.md`; final v1.0 requirement status is in `REFLECTION-v1.0.md`; v1.1 validation and requirement status are in `VERIFY-v1.1.md` and `REFLECTION-v1.1.md`.
+The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.9 validation details are in `VERIFY-v0.9.md`; v1.0 validation details are in `VERIFY-v1.0.md`; v1.1 validation and requirement status are in `VERIFY-v1.1.md` and `REFLECTION-v1.1.md`; v1.2 validation and requirement status are in `VERIFY-v1.2.md` and `REFLECTION-v1.2.md`.
 
 ## Changelog summary
 

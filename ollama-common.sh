@@ -6,16 +6,106 @@ ollama_timeout_cmd() {
   if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
 }
 
+ollama_systemctl_available() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --version >/dev/null 2>&1
+}
+
 ollama_has_systemd() {
-  command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd
+  ollama_systemctl_available
+}
+
+ollama_system_service_load_state() {
+  local state out
+  ollama_systemctl_available || return 1
+  state="$(systemctl show -p LoadState --value ollama.service 2>/dev/null | awk 'NF{print; exit}' || true)"
+  if [[ -n "$state" && "$state" != "not-found" ]]; then
+    printf '%s\n' "$state"
+    return 0
+  fi
+  out="$(systemctl status ollama.service --no-pager 2>/dev/null || true)"
+  if printf '%s\n' "$out" | grep -Eq 'Loaded:[[:space:]]+loaded'; then
+    printf 'loaded\n'
+    return 0
+  fi
+  out="$(systemctl list-unit-files ollama.service --no-legend --no-pager 2>/dev/null || true)"
+  if printf '%s\n' "$out" | awk '$1=="ollama.service"{found=1} END{exit found?0:1}'; then
+    printf 'detected\n'
+    return 0
+  fi
+  [[ -n "$state" ]] && printf '%s\n' "$state" || printf 'unknown\n'
 }
 
 ollama_system_service_exists() {
-  ollama_has_systemd && systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'
+  local state out
+  ollama_systemctl_available || return 1
+
+  # Prefer cheap machine-readable checks, but do not trust only one code path.
+  # Some WSL/systemd combinations allow `systemctl status ollama` while other
+  # discovery forms are blank or restricted.
+  state="$(ollama_system_service_load_state || true)"
+  case "$state" in
+    loaded|linked|linked-runtime|alias|generated|transient|static|indirect|enabled|disabled|masked) return 0 ;;
+  esac
+
+  systemctl cat ollama.service >/dev/null 2>&1 && return 0
+
+  out="$(systemctl list-unit-files ollama.service --no-legend --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | awk '$1=="ollama.service"{found=1} END{exit found?0:1}' && return 0
+
+  out="$(systemctl list-units --all ollama.service --no-legend --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | awk '$1=="ollama.service"{found=1} END{exit found?0:1}' && return 0
+
+  out="$(systemctl status ollama.service --no-pager 2>/dev/null || true)"
+  printf '%s\n' "$out" | grep -Eq '(^|[[:space:]])ollama\.service[[:space:]]+-|Loaded:[[:space:]]+loaded' && return 0
+
+  [[ -f /etc/systemd/system/ollama.service || -f /usr/lib/systemd/system/ollama.service || -f /lib/systemd/system/ollama.service ]] && return 0
+
+  return 1
 }
 
 ollama_user_service_exists() {
-  ollama_has_systemd && systemctl --user list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'
+  local state
+  ollama_systemctl_available || return 1
+  state="$(systemctl --user show -p LoadState --value ollama.service 2>/dev/null | awk 'NF{print; exit}' || true)"
+  [[ -n "$state" && "$state" != "not-found" ]] && return 0
+  systemctl --user cat ollama.service >/dev/null 2>&1 && return 0
+  systemctl --user status ollama.service >/dev/null 2>&1 && return 0
+  return 1
+}
+
+ollama_sudo_hint() {
+  local cmd="$*"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    printf '%s\n' "$cmd"
+  else
+    printf 'sudo %s\n' "$cmd"
+  fi
+}
+
+ollama_systemctl_privileged() {
+  local action="${1:-}" unit="${2:-ollama.service}"
+  if [[ $# -ge 2 ]]; then shift 2; elif [[ $# -ge 1 ]]; then shift; fi
+  [[ -n "$action" ]] || { echo "ERROR: missing systemctl action" >&2; return 2; }
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    systemctl "$action" "$unit" "$@"
+    return $?
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    echo "Privilege required: sudo systemctl $action $unit"
+    sudo -v || return $?
+    sudo systemctl "$action" "$unit" "$@"
+    return $?
+  fi
+  echo "ERROR: sudo is required for: systemctl $action $unit" >&2
+  echo "Install sudo or run this command as root." >&2
+  return 126
+}
+
+ollama_systemctl_nonprivileged() {
+  local action="${1:-}" unit="${2:-ollama.service}"
+  if [[ $# -ge 2 ]]; then shift 2; elif [[ $# -ge 1 ]]; then shift; fi
+  [[ -n "$action" ]] || { echo "ERROR: missing systemctl action" >&2; return 2; }
+  systemctl "$action" "$unit" "$@"
 }
 
 ollama_api_version_json() {
@@ -95,20 +185,21 @@ ollama_print_available_model_commands() {
 }
 
 ollama_status_short_common() {
-  local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" timeout_s="${2:-3}" version service_state service_enabled
+  local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}" timeout_s="${2:-3}" version service_state service_enabled load_state
   echo "Ollama status:"
   if ollama_system_service_exists; then
-    service_state="$(systemctl is-active ollama 2>/dev/null || true)"
-    service_enabled="$(systemctl is-enabled ollama 2>/dev/null || true)"
-    echo "  service: system ollama.service active=${service_state:-unknown} enabled=${service_enabled:-unknown}"
+    service_state="$(systemctl is-active ollama.service 2>/dev/null || true)"
+    service_enabled="$(systemctl is-enabled ollama.service 2>/dev/null || true)"
+    load_state="$(ollama_system_service_load_state || true)"
+    echo "  service: system ollama.service load=${load_state:-unknown} active=${service_state:-unknown} enabled=${service_enabled:-unknown}"
   elif ollama_user_service_exists; then
-    service_state="$(systemctl --user is-active ollama 2>/dev/null || true)"
-    service_enabled="$(systemctl --user is-enabled ollama 2>/dev/null || true)"
+    service_state="$(systemctl --user is-active ollama.service 2>/dev/null || true)"
+    service_enabled="$(systemctl --user is-enabled ollama.service 2>/dev/null || true)"
     echo "  service: user ollama.service active=${service_state:-unknown} enabled=${service_enabled:-unknown}"
-  elif ollama_has_systemd; then
-    echo "  service: ollama.service not found under system or user systemd"
+  elif ollama_systemctl_available; then
+    echo "  service: ollama.service not found by systemctl"
   else
-    echo "  service: systemd not available as PID 1"
+    echo "  service: systemctl not available"
   fi
 
   if version="$(ollama_api_version_json "$base_url" "$timeout_s" 2>/dev/null)"; then
@@ -135,8 +226,7 @@ ollama_print_start_hint() {
   local base_url="${1:-${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}}"
   echo "Ollama API is not reachable at $base_url. Tests were not run."
   if ollama_system_service_exists; then
-    echo "Start:  systemctl start ollama"
-    echo "Alt:    sudo systemctl start ollama"
+    echo "Start:  sudo systemctl start ollama"
     echo "Check:  systemctl status ollama --no-pager"
     echo "Logs:   journalctl -u ollama -n 120 --no-pager"
   elif ollama_user_service_exists; then

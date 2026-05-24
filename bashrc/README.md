@@ -12,7 +12,7 @@ Issues found:
 4. There was no short command alias for the model-pattern runner.
 5. The status shortcut used an option name that needed to match the packaged `ollama-status --short` command.
 
-## What the packaged `.bashrc` changes in v1.1
+## What the packaged `.bashrc` changes in v1.2
 
 - Keeps your `crs` and `uz` aliases.
 - Keeps NVM loading and `~/bin` path setup.
@@ -22,6 +22,14 @@ Issues found:
 - Does not run `ollama list` automatically on terminal open.
 - Adds commands: `ollama_start`, `ollama_stop`, `ollama_status`, `ollama_quick_status`, `ollama_models`, `ollama_gpu`, `ollama_logs`, `ollama_test`.
 - Adds aliases: `os`, `oq`, `ost`, `osp`, `om`, `og`, `ol`, `ot`.
+- Adds an optional wrapper so `ollama status`, `ollama start`, `ollama stop`, `ollama logs`, `ollama models`, `ollama gpu`, and `ollama test` call the helpers; ordinary upstream subcommands still pass through. Disable with `export OLLAMA_BASHRC_WRAP_CLI=0`.
+
+
+Additional v1.2 fixes:
+
+- Fallback `ollama_start` / `ollama_stop` no longer require PID 1 to be named `systemd` before trying the system service path.
+- If the package-level `ollama-start` / `ollama-stop` commands are not on `PATH`, the Bash helpers use `sudo systemctl start|stop ollama.service` for system services and will trigger the normal sudo password prompt.
+- Status/log helpers detect the system service through `systemctl show`, `systemctl cat`, `systemctl list-unit-files`, `systemctl list-units`, and `systemctl status` fallbacks.
 
 ## Install
 
@@ -59,8 +67,38 @@ ollama_quick_status
 ollama_models
 ollama_test qwen3.6
 ollama_stop
+
+# Compatibility wrapper examples:
+ollama status
+ollama start
+ollama models
+ollama test qwen3.6
+ollama stop
 ```
 
-## v1.1 note
+## v1.2 note
 
-The profile no longer tries to configure server-side Ollama runtime variables. Keep `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_KEEP_ALIVE`, flash-attention, and KV-cache choices in the `ollama.service` systemd override. The Bash profile only supplies client-side convenience commands and aliases.
+The profile no longer tries to configure server-side Ollama runtime variables and now uses sudo-aware systemd fallback helpers. Keep `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_KEEP_ALIVE`, flash-attention, and KV-cache choices in the `ollama.service` systemd override. The Bash profile only supplies client-side convenience commands and aliases.
+
+
+## v1.2 interactive Ollama wrapper
+
+The packaged `.bashrc` defines a shell function named `ollama` only for interactive shells. It passes normal upstream CLI commands through to the real `ollama` binary, but intercepts these convenience subcommands:
+
+```bash
+ollama status
+ollama start
+ollama stop
+ollama models
+ollama logs
+ollama gpu
+ollama test qwen3.6 --no-conc
+```
+
+This fixes the confusing upstream error `unknown command "status" for "ollama"` in interactive terminals.
+
+To disable the optional `ollama status` shell wrapper, put this before the helper block or before sourcing the packaged profile:
+
+```bash
+export OLLAMA_BASHRC_WRAP=0
+```

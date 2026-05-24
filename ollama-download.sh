@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.8.0"
-SCRIPT_SIGNATURE="OLLAMA_DOWNLOAD_SCRIPT_SIGNATURE=v0.8.0-resumable-gguf-import"
+VERSION="1.2.0"
+SCRIPT_SIGNATURE="OLLAMA_DOWNLOAD_SCRIPT_SIGNATURE=v1.2.0-one-arg-source-aria2-systemd"
 
 METHOD="${METHOD:-auto}"
 REPO_ID="${REPO_ID:-}"
@@ -10,8 +10,10 @@ GGUF_FILE="${GGUF_FILE:-}"
 REVISION="${REVISION:-main}"
 URL="${URL:-}"
 LOCAL_FILE="${LOCAL_FILE:-}"
+SOURCE_ARG="${SOURCE_ARG:-}"
+SOURCE_ARG_MODE=0
 MODEL_NAME="${MODEL_NAME:-}"
-BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://localhost:11434}}"
+BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 BASE_OUT_DIR="${BASE_OUT_DIR:-$HOME/models/gguf}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-}"
 LOG_ROOT="${LOG_ROOT:-$HOME/log/ollama-download}"
@@ -33,6 +35,9 @@ DRY_RUN="${DRY_RUN:-0}"
 FORCE="${FORCE:-0}"
 PRINT_PATH="${PRINT_PATH:-0}"
 MODFILE="${MODFILE:-}"
+DEFAULT_NUM_CTX="${DEFAULT_NUM_CTX:-8192}"
+APPLY_DEFAULT_PARAMS="${APPLY_DEFAULT_PARAMS:-1}"
+PARAMS=()
 
 RUN_DIR="$LOG_ROOT/run-$RUN_ID"
 ERRORS_FILE="$RUN_DIR/errors.log"
@@ -43,8 +48,6 @@ SHA256_FILE="$RUN_DIR/sha256.txt"
 ARIA2_INPUT_FILE=""
 CURL_CONFIG_FILE=""
 
-PARAMS=()
-
 usage() {
   cat <<EOF_USAGE
 ollama-download.sh v$VERSION
@@ -52,39 +55,41 @@ $SCRIPT_SIGNATURE
 
 Resumable GGUF downloader/importer for WSL2 + Ollama.
 
-Primary workflow:
-  download GGUF with resume/retry -> verify local file -> generate Modelfile -> ollama create
+Simple usage:
+  ./ollama-download.sh [--method auto|aria2|curl|hf] SOURCE
 
-Usage:
+SOURCE can be:
+  1. Hugging Face file URL:
+     https://huggingface.co/ORG/REPO/blob/main/model.gguf
+     https://huggingface.co/ORG/REPO/resolve/main/model.gguf?download=true
+  2. Hugging Face shorthand:
+     ORG/REPO/model.gguf
+  3. Local GGUF file path:
+     /path/to/model.gguf
+
+Examples:
+  ./ollama-download.sh --method aria2 https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf?download=true
+  ./ollama-download.sh --method aria2 unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+  ./ollama-download.sh /home/alex/models/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+
+Default one-arg behavior:
+  - infers repo/file or URL/local-file
+  - infers Ollama model name from GGUF filename
+  - creates/imports the model by default
+  - adds PARAMETER num_ctx $DEFAULT_NUM_CTX unless --num-ctx or --no-default-params is used
+  - ensures Ollama is reachable before ollama create; ollama-start may ask for sudo if needed
+
+Compatibility usage still works:
   ./ollama-download.sh --repo REPO_ID --file FILE.gguf --name LOCAL_MODEL [options]
   ./ollama-download.sh --url URL --file FILE.gguf --name LOCAL_MODEL [options]
   ./ollama-download.sh --local-file /path/model.gguf --name LOCAL_MODEL [options]
 
-Examples:
-  # Public Hugging Face GGUF, explicit aria2 resume semantics
-  ./ollama-download.sh \\
-    --method aria2 \\
-    --repo bartowski/Qwen3-32B-GGUF \\
-    --file Qwen3-32B-Q4_K_M.gguf \\
-    --name qwen3-32b-q4km \\
-    --num-ctx 8192
-
-  # Hugging Face CLI path; good for gated/private repos after: hf auth login
-  ./ollama-download.sh \\
-    --method hf \\
-    --repo org/private-model-GGUF \\
-    --file model-Q4_K_M.gguf \\
-    --name private-model-q4km
-
-  # Download only, no Ollama import
-  ./ollama-download.sh --repo REPO_ID --file FILE.gguf --no-create
-
 Source options:
-  --repo ID               Hugging Face repo id, e.g. bartowski/Qwen3-32B-GGUF
+  --repo ID               Hugging Face repo id, e.g. unsloth/Qwen3.6-35B-A3B-GGUF
   --file PATH             GGUF file path inside repo, or output filename for --url
   --revision REV          Hugging Face revision/branch/commit (default: $REVISION)
-  --url URL               Direct download URL; supports resumable aria2/curl paths
-  --local-file PATH       Skip download and import an existing local GGUF
+  --url URL               Direct download URL
+  --local-file PATH       Skip download and import existing local GGUF
 
 Download options:
   --method NAME           auto|hf|aria2|curl (default: $METHOD)
@@ -101,8 +106,8 @@ Download options:
   --force                 Remove existing destination file and .aria2 state before download
 
 Ollama import options:
-  --name NAME             Ollama model name to create. If omitted, script downloads only.
-  --create                Force ollama create; requires --name
+  --name NAME             Ollama model name. Inferred in one-arg mode when omitted.
+  --create                Force ollama create; requires --name unless inferred
   --no-create             Download/verify only
   --base-url URL          Ollama API URL for readiness checks (default: $BASE_URL)
   --ensure-server         Start/check Ollama before create (default)
@@ -110,6 +115,7 @@ Ollama import options:
   --modelfile PATH        Modelfile path to write/use (default: run log dir)
   --param KEY=VALUE       Add raw PARAMETER line to generated Modelfile; repeatable
   --num-ctx N             Shortcut for --param num_ctx=N
+  --no-default-params     Do not add default num_ctx in one-arg mode
 
 Operational options:
   --log-root DIR          Run log root (default: $LOG_ROOT)
@@ -129,7 +135,6 @@ EOF_USAGE
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*" >>"$ERRORS_FILE" 2>/dev/null || true; }
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { printf 'ERROR: missing command: %s\n' "$1" >&2; exit 3; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
@@ -140,6 +145,15 @@ cleanup() {
   return 0
 }
 trap cleanup EXIT
+
+refresh_run_paths() {
+  RUN_DIR="$LOG_ROOT/run-$RUN_ID"
+  ERRORS_FILE="$RUN_DIR/errors.log"
+  SUMMARY_FILE="$RUN_DIR/summary.txt"
+  META_FILE="$RUN_DIR/meta.txt"
+  DOWNLOAD_LOG="$RUN_DIR/download.log"
+  SHA256_FILE="$RUN_DIR/sha256.txt"
+}
 
 sanitize_name() {
   local s="$1"
@@ -154,6 +168,19 @@ file_basename_from_url() {
   no_query="${1%%\?*}"
   path="${no_query%/}"
   basename -- "$path"
+}
+
+infer_model_name_from_file() {
+  local file base s
+  file="$1"
+  base="$(basename -- "$file")"
+  s="${base%.gguf}"
+  s="${s%.GGUF}"
+  s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+  s="$(printf '%s' "$s" | sed -E 's/[^a-z0-9._-]+/-/g; s/_/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+  s="$(printf '%s' "$s" | sed -E 's/-q([0-9]+)-k-([mlxsm]+)$/-q\1k\2/; s/-q([0-9]+)-([0-9]+)$/-q\1_\2/')"
+  [[ -n "$s" ]] || s="imported-gguf"
+  printf '%s' "$s"
 }
 
 human_size() {
@@ -186,6 +213,102 @@ print(f"https://huggingface.co/{repo_q}/resolve/{quote(rev, safe='')}/{path_q}?d
 PY
   else
     printf 'https://huggingface.co/%s/resolve/%s/%s?download=true\n' "$REPO_ID" "$REVISION" "$GGUF_FILE"
+  fi
+}
+
+normalize_hf_url_if_needed() {
+  local src="$1"
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "$src"
+    return 0
+  fi
+  python3 - "$src" <<'PY'
+import sys
+from urllib.parse import urlparse, unquote, quote
+src = sys.argv[1]
+u = urlparse(src)
+if u.netloc.lower() not in {"huggingface.co", "www.huggingface.co"}:
+    print(src)
+    raise SystemExit
+parts = [unquote(p) for p in u.path.split('/') if p]
+if len(parts) >= 5 and parts[2] in {"blob", "resolve"}:
+    repo = "/".join(parts[:2])
+    rev = parts[3]
+    file_path = "/".join(parts[4:])
+    repo_q = "/".join(quote(p, safe="") for p in repo.split('/'))
+    file_q = "/".join(quote(p, safe="") for p in file_path.split('/'))
+    print(f"https://huggingface.co/{repo_q}/resolve/{quote(rev, safe='')}/{file_q}?download=true")
+else:
+    print(src)
+PY
+}
+
+parse_hf_url_fields() {
+  local src="$1"
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$src" <<'PY'
+import sys
+from urllib.parse import urlparse, unquote
+u = urlparse(sys.argv[1])
+if u.netloc.lower() not in {"huggingface.co", "www.huggingface.co"}:
+    raise SystemExit(1)
+parts = [unquote(p) for p in u.path.split('/') if p]
+if len(parts) < 5 or parts[2] not in {"blob", "resolve"}:
+    raise SystemExit(1)
+print("repo=" + "/".join(parts[:2]))
+print("rev=" + parts[3])
+print("file=" + "/".join(parts[4:]))
+PY
+}
+
+apply_source_arg() {
+  local src="$1" fields line parts_count repo file
+  SOURCE_ARG_MODE=1
+
+  if [[ -f "$src" ]]; then
+    LOCAL_FILE="$src"
+    [[ -n "$GGUF_FILE" ]] || GGUF_FILE="$(basename -- "$src")"
+  elif [[ "$src" =~ ^https?:// ]]; then
+    fields="$(parse_hf_url_fields "$src" 2>/dev/null || true)"
+    if [[ -n "$fields" ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+          repo=*) [[ -n "$REPO_ID" ]] || REPO_ID="${line#repo=}" ;;
+          rev=*) [[ "$REVISION" == "main" ]] && REVISION="${line#rev=}" ;;
+          file=*) [[ -n "$GGUF_FILE" ]] || GGUF_FILE="${line#file=}" ;;
+        esac
+      done <<<"$fields"
+    fi
+    URL="$(normalize_hf_url_if_needed "$src")"
+    [[ -n "$GGUF_FILE" ]] || GGUF_FILE="$(file_basename_from_url "$URL")"
+  elif [[ "$src" == hf://* ]]; then
+    src="${src#hf://}"
+    IFS='/' read -r -a _src_parts <<<"$src"
+    parts_count="${#_src_parts[@]}"
+    [[ "$parts_count" -ge 3 ]] || { printf 'ERROR: hf:// source must be hf://ORG/REPO/FILE.gguf\n' >&2; exit 2; }
+    REPO_ID="${_src_parts[0]}/${_src_parts[1]}"
+    GGUF_FILE="$(IFS=/; printf '%s' "${_src_parts[*]:2}")"
+  elif [[ "$src" == *.gguf || "$src" == *.GGUF || "$src" == */*.gguf || "$src" == */*.GGUF ]]; then
+    IFS='/' read -r -a _src_parts <<<"$src"
+    parts_count="${#_src_parts[@]}"
+    if [[ "$parts_count" -ge 3 ]]; then
+      repo="${_src_parts[0]}/${_src_parts[1]}"
+      file="$(IFS=/; printf '%s' "${_src_parts[*]:2}")"
+      REPO_ID="$repo"
+      GGUF_FILE="$file"
+    else
+      printf 'ERROR: source not found as local file and not valid HF shorthand: %s\n' "$src" >&2
+      printf 'Use ORG/REPO/model.gguf or a full https://huggingface.co/... URL.\n' >&2
+      exit 2
+    fi
+  else
+    printf 'ERROR: cannot understand source: %s\n' "$src" >&2
+    printf 'Use a Hugging Face file URL, ORG/REPO/model.gguf, or local /path/model.gguf.\n' >&2
+    exit 2
+  fi
+
+  if [[ -z "$MODEL_NAME" && -n "$GGUF_FILE" ]]; then
+    MODEL_NAME="$(infer_model_name_from_file "$GGUF_FILE")"
   fi
 }
 
@@ -226,7 +349,7 @@ ensure_ollama_server() {
   sd="$(script_dir)"
   start_script="$sd/ollama-start"
   if [[ -x "$start_script" ]]; then
-    BASE_URL="$BASE_URL" "$start_script" >/dev/null || true
+    BASE_URL="$BASE_URL" "$start_script" || true
   elif command -v ollama >/dev/null 2>&1; then
     mkdir -p "$HOME/log"
     nohup ollama serve >"$HOME/log/ollama-serve.log" 2>&1 &
@@ -235,6 +358,7 @@ ensure_ollama_server() {
 
   curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" >/dev/null 2>&1 || {
     printf 'ERROR: Ollama server is not reachable at %s\n' "$BASE_URL" >&2
+    printf 'Start/check manually: sudo systemctl start ollama && systemctl status ollama --no-pager\n' >&2
     exit 6
   }
 }
@@ -244,9 +368,9 @@ parse_args() {
     case "$1" in
       --repo) REPO_ID="${2:-}"; shift 2 ;;
       --file) GGUF_FILE="${2:-}"; shift 2 ;;
-      --revision) REVISION="${2:-}"; shift 2 ;;
-      --url) URL="${2:-}"; shift 2 ;;
-      --local-file) LOCAL_FILE="${2:-}"; shift 2 ;;
+      --revision|--rev) REVISION="${2:-}"; shift 2 ;;
+      --url) URL="${2:-}"; SOURCE_ARG_MODE=1; shift 2 ;;
+      --local-file) LOCAL_FILE="${2:-}"; SOURCE_ARG_MODE=1; shift 2 ;;
       --method) METHOD="${2:-}"; shift 2 ;;
       --out-dir) DOWNLOAD_DIR="${2:-}"; shift 2 ;;
       --base-out-dir) BASE_OUT_DIR="${2:-}"; shift 2 ;;
@@ -268,14 +392,51 @@ parse_args() {
       --modelfile) MODFILE="${2:-}"; shift 2 ;;
       --param) PARAMS+=("${2:-}"); shift 2 ;;
       --num-ctx) PARAMS+=("num_ctx=${2:-}"); shift 2 ;;
-      --log-root) LOG_ROOT="${2:-}"; RUN_DIR="$LOG_ROOT/run-$RUN_ID"; ERRORS_FILE="$RUN_DIR/errors.log"; SUMMARY_FILE="$RUN_DIR/summary.txt"; META_FILE="$RUN_DIR/meta.txt"; DOWNLOAD_LOG="$RUN_DIR/download.log"; SHA256_FILE="$RUN_DIR/sha256.txt"; shift 2 ;;
-      --run-id) RUN_ID="${2:-}"; RUN_DIR="$LOG_ROOT/run-$RUN_ID"; ERRORS_FILE="$RUN_DIR/errors.log"; SUMMARY_FILE="$RUN_DIR/summary.txt"; META_FILE="$RUN_DIR/meta.txt"; DOWNLOAD_LOG="$RUN_DIR/download.log"; SHA256_FILE="$RUN_DIR/sha256.txt"; shift 2 ;;
+      --no-default-params) APPLY_DEFAULT_PARAMS=0; shift ;;
+      --log-root) LOG_ROOT="${2:-}"; refresh_run_paths; shift 2 ;;
+      --run-id) RUN_ID="${2:-}"; refresh_run_paths; shift 2 ;;
       --dry-run) DRY_RUN=1; shift ;;
       --print-path) PRINT_PATH=1; shift ;;
       -h|--help) usage; exit 0 ;;
-      *) printf 'ERROR: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+      --) shift; while [[ $# -gt 0 ]]; do [[ -z "$SOURCE_ARG" ]] || { printf 'ERROR: only one SOURCE positional argument is supported\n' >&2; exit 2; }; SOURCE_ARG="$1"; shift; done ;;
+      -*) printf 'ERROR: unknown argument: %s\n' "$1" >&2; printf 'Use -h for help.\n' >&2; exit 2 ;;
+      *) [[ -z "$SOURCE_ARG" ]] || { printf 'ERROR: only one SOURCE positional argument is supported\n' >&2; exit 2; }; SOURCE_ARG="$1"; shift ;;
     esac
   done
+  if [[ -n "$SOURCE_ARG" ]]; then
+    apply_source_arg "$SOURCE_ARG"
+  fi
+  if [[ -n "$URL" ]]; then
+    local fields line
+    fields="$(parse_hf_url_fields "$URL" 2>/dev/null || true)"
+    if [[ -n "$fields" ]]; then
+      while IFS= read -r line; do
+        case "$line" in
+          repo=*) [[ -n "$REPO_ID" ]] || REPO_ID="${line#repo=}" ;;
+          rev=*) [[ "$REVISION" == "main" ]] && REVISION="${line#rev=}" ;;
+          file=*) [[ -n "$GGUF_FILE" ]] || GGUF_FILE="${line#file=}" ;;
+        esac
+      done <<<"$fields"
+      URL="$(normalize_hf_url_if_needed "$URL")"
+    fi
+    if [[ -z "$GGUF_FILE" ]]; then
+      GGUF_FILE="$(file_basename_from_url "$URL")"
+    fi
+  fi
+  if [[ -n "$LOCAL_FILE" && -z "$GGUF_FILE" ]]; then
+    GGUF_FILE="$(basename -- "$LOCAL_FILE")"
+  fi
+  if [[ -z "$MODEL_NAME" && "$SOURCE_ARG_MODE" == "1" && -n "$GGUF_FILE" ]]; then
+    MODEL_NAME="$(infer_model_name_from_file "$GGUF_FILE")"
+  fi
+}
+
+param_exists() {
+  local key="$1" p
+  for p in "${PARAMS[@]}"; do
+    [[ "${p%%=*}" == "$key" ]] && return 0
+  done
+  return 1
 }
 
 validate_args() {
@@ -298,12 +459,20 @@ validate_args() {
     [[ -n "$GGUF_FILE" ]] || GGUF_FILE="$(file_basename_from_url "$URL")"
     [[ -n "$GGUF_FILE" && "$GGUF_FILE" != "." ]] || { printf 'ERROR: cannot infer filename from --url; pass --file FILE.gguf\n' >&2; exit 2; }
   else
-    [[ -n "$REPO_ID" ]] || { printf 'ERROR: pass --repo REPO_ID or --url URL or --local-file PATH\n' >&2; exit 2; }
-    [[ -n "$GGUF_FILE" ]] || { printf 'ERROR: pass --file FILE.gguf\n' >&2; exit 2; }
+    if [[ -z "$REPO_ID" || -z "$GGUF_FILE" ]]; then
+      printf 'Usage: ./ollama-download.sh [--method aria2] SOURCE\n' >&2
+      printf 'Example: ./ollama-download.sh --method aria2 unsloth/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\n' >&2
+      printf 'Use -h for full help.\n' >&2
+      exit 2
+    fi
+  fi
+
+  if [[ "$SOURCE_ARG_MODE" == "1" && "$APPLY_DEFAULT_PARAMS" == "1" && "$CREATE_MODE" != "0" ]]; then
+    if ! param_exists num_ctx; then PARAMS+=("num_ctx=$DEFAULT_NUM_CTX"); fi
   fi
 
   if [[ "$CREATE_MODE" == "1" && -z "$MODEL_NAME" ]]; then
-    printf 'ERROR: --create requires --name MODEL_NAME\n' >&2
+    printf 'ERROR: --create requires --name MODEL_NAME or one-arg SOURCE that allows name inference\n' >&2
     exit 2
   fi
 
@@ -341,9 +510,15 @@ should_create_model() {
   [[ -n "$MODEL_NAME" ]]
 }
 
+existing_complete_file() {
+  local f="$1"
+  [[ "$FORCE" != "1" && -f "$f" && -s "$f" && ! -f "$f.aria2" ]]
+}
+
 download_hf() {
   local dest_dir="$1" hf_cli
   hf_cli="$(find_hf_cli)" || { printf 'ERROR: missing hf CLI. Install with: python3 -m pip install -U huggingface_hub\n' >&2; exit 3; }
+  [[ -n "$REPO_ID" && -n "$GGUF_FILE" ]] || { printf 'ERROR: hf method requires --repo and --file, or an HF shorthand/URL source\n' >&2; exit 2; }
   mkdir -p "$dest_dir"
   export HF_HUB_DOWNLOAD_TIMEOUT="$TIMEOUT_SEC"
   if [[ "$DISABLE_XET" == "1" ]]; then export HF_HUB_DISABLE_XET=1; fi
@@ -380,6 +555,7 @@ download_aria2() {
 
   log "download method: aria2c"
   log "destination: $out_dir/$out_name"
+  log "source: ${REPO_ID:+$REPO_ID/}$GGUF_FILE"
   run_with_retries aria2c \
     --input-file="$ARIA2_INPUT_FILE" \
     --continue=true \
@@ -451,7 +627,7 @@ verify_file() {
 
   prefix="$(head -c 4 "$f" 2>/dev/null || true)"
   if [[ "$prefix" != "GGUF" ]]; then
-    warn "file does not start with GGUF magic bytes; verify that this is a real .gguf model: $f"
+    warn "file does not start with GGUF magic bytes; verify this is a real .gguf model: $f"
   fi
 
   if [[ -n "$CHECKSUM_SHA256" ]]; then
@@ -501,6 +677,7 @@ write_meta() {
     printf '%s\n' "$SCRIPT_SIGNATURE"
     printf 'generated_at=%s\n' "$(date -Is)"
     printf 'method=%s\n' "$method_used"
+    printf 'source_arg=%s\n' "$SOURCE_ARG"
     printf 'repo_id=%s\n' "$REPO_ID"
     printf 'file=%s\n' "$GGUF_FILE"
     printf 'revision=%s\n' "$REVISION"
@@ -511,6 +688,7 @@ write_meta() {
     printf 'model_name=%s\n' "$MODEL_NAME"
     printf 'create=%s\n' "$create_flag"
     printf 'base_url=%s\n' "$BASE_URL"
+    printf 'params=%s\n' "${PARAMS[*]:-}"
     printf 'retry_wait=%s\n' "$RETRY_WAIT"
     printf 'max_tries=%s\n' "$MAX_TRIES"
     printf 'timeout_sec=%s\n' "$TIMEOUT_SEC"
@@ -560,22 +738,29 @@ main() {
   if [[ "$DRY_RUN" == "1" ]]; then
     write_meta "$dest_dir" "$method_used" "$final_file" "$create_flag"
     log "dry_run: true"
+    log "source: ${SOURCE_ARG:-${URL:-${REPO_ID:+$REPO_ID/$GGUF_FILE}}}"
     log "method: $method_used"
     log "destination: $final_file"
     log "create: $create_flag"
     [[ "$create_flag" == "1" ]] && log "model: $MODEL_NAME"
+    [[ "${#PARAMS[@]}" -gt 0 ]] && log "params: ${PARAMS[*]}"
     exit 0
   fi
 
   remove_existing_if_forced "$final_file"
 
-  case "$method_used" in
-    local) log "download method: local-file; skipping download" ;;
-    hf) download_hf "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
-    aria2) download_aria2 "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
-    curl) download_curl "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
-    *) printf 'ERROR: internal invalid method: %s\n' "$method_used" >&2; exit 2 ;;
-  esac || { printf 'ERROR: download failed\n' >&2; exit 4; }
+  if existing_complete_file "$final_file"; then
+    log "destination already exists; skipping download: $final_file"
+    method_used="existing"
+  else
+    case "$method_used" in
+      local) log "download method: local-file; skipping download" ;;
+      hf) download_hf "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
+      aria2) download_aria2 "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
+      curl) download_curl "$dest_dir" 2>&1 | tee -a "$DOWNLOAD_LOG" ;;
+      *) printf 'ERROR: internal invalid method: %s\n' "$method_used" >&2; exit 2 ;;
+    esac || { printf 'ERROR: download failed\n' >&2; exit 4; }
+  fi
 
   final_file="$(final_file_path "$dest_dir")"
   final_file="$(abs_path "$final_file")"
