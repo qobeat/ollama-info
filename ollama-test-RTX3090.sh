@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.7.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v0.7.0-classified-longctx-soak-vram"
+VERSION="1.0.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.0.0-model-selector-preflight-wsl"
 
-MODEL="${MODEL:-qwen3:8b}"
+MODEL="${MODEL:-}"
+MODEL_PATTERN="${MODEL_PATTERN:-}"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://localhost:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
@@ -34,6 +35,8 @@ ZIP_ON_EXIT="${ZIP_ON_EXIT:-1}"
 PRINT_TERMINAL_SUMMARY="${PRINT_TERMINAL_SUMMARY:-1}"
 THINK="${THINK:-false}"
 PROMPT_PREFIX="${PROMPT_PREFIX:-}"
+SERVER_LOG_LINES="${SERVER_LOG_LINES:-240}"
+CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 RAW_DIR="$RUN_DIR/raw"
@@ -46,6 +49,13 @@ TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 META="$RUN_DIR/meta.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
 ARCHIVE_PATH=""
+FAILURE_HINTS="$RUN_DIR/failure-hints.txt"
+SERVER_LOG_TAIL="$RUN_DIR/ollama-server-log-tail.txt"
+WSL_DIAG="$RUN_DIR/wsl-diagnostics.txt"
+API_VERSION_FILE="$RUN_DIR/ollama-api-version.json"
+API_TAGS_FILE="$RUN_DIR/ollama-api-tags.json"
+API_SHOW_FILE="$RUN_DIR/ollama-api-show-model.json"
+OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 
 usage() {
   cat <<EOF_USAGE
@@ -55,10 +65,21 @@ $SCRIPT_SIGNATURE
 Run RTX 3090 + Ollama health/performance tests and save raw JSON, request payloads, CSV, Markdown, and compact ASCII summaries.
 
 Usage:
-  ./ollama-test-RTX3090.sh [options]
+  ./ollama-test-RTX3090.sh MODEL_PATTERN [options]
+  ./ollama-test-RTX3090.sh --model MODEL_PATTERN [options]
+  ./ollama-test-RTX3090.sh --help
+
+Short example:
+  ./ollama-test-RTX3090.sh qwen3.6
+
+Model selection:
+  MODEL_PATTERN is resolved against locally available Ollama model names from /api/tags.
+  Matching order is exact full name, exact base name before ':', then unique case-insensitive substring.
+  Example: qwen3.6 resolves to qwen3.6:35b when that is the only local match.
+  With no MODEL_PATTERN, or with no/ambiguous match, the script lists available models and prints this help.
 
 Core options:
-  --model NAME              Model to test (default: $MODEL)
+  --model PATTERN           Model name or pattern to resolve locally
   --base-url URL            Ollama base URL (default: $BASE_URL)
   --out-dir DIR             Output root (default: $OUT_DIR)
   --run-id ID               Override run id
@@ -72,6 +93,8 @@ Core options:
   --concurrency N           Parallel GPU requests for concurrency probe (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
   --prompt-prefix TEXT      Optional prompt prefix; default is empty
+  --server-log-lines N      Capture last N Ollama server log lines when available (default: $SERVER_LOG_LINES)
+  --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots
 
 Optional probes:
   --run-conc / --no-conc    Enable/disable concurrency probe (default: $RUN_CONC)
@@ -85,7 +108,7 @@ Optional probes:
   --vram-num-predict N      VRAM-pressure generation length (default: $VRAM_NUM_PREDICT)
 
 Operational options:
-  --pull / --no-pull        Pull missing model(s) (default: $PULL_IF_MISSING)
+  --pull / --no-pull        Pull missing exact model after resolution (default: $PULL_IF_MISSING)
   --ensure-server / --no-ensure-server  Start/check Ollama server (default: $ENSURE_SERVER)
   --terminal-summary / --no-terminal-summary  Print <=50-line ASCII terminal summary (default: $PRINT_TERMINAL_SUMMARY)
   --zip / --no-zip          Create ~/tmp archive on exit (default: $ZIP_ON_EXIT)
@@ -98,6 +121,10 @@ warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*"
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
+
+ORIGINAL_ARGC=$#
+NO_MODEL_ARGS=0
+[[ "$ORIGINAL_ARGC" -eq 0 ]] && NO_MODEL_ARGS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -115,6 +142,9 @@ while [[ $# -gt 0 ]]; do
     --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
     --think) THINK="${2:-}"; shift 2 ;;
     --prompt-prefix) PROMPT_PREFIX="${2:-}"; shift 2 ;;
+    --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
+    --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
+    --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
     --run-conc) RUN_CONC=1; shift ;;
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;
@@ -135,12 +165,14 @@ while [[ $# -gt 0 ]]; do
     --zip) ZIP_ON_EXIT=1; shift ;;
     --no-zip) ZIP_ON_EXIT=0; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    --*) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    *)
+      if [[ -z "$MODEL" ]]; then MODEL="$1"; shift; else echo "ERROR: unexpected extra positional argument: $1" >&2; usage >&2; exit 2; fi
+      ;;
   esac
 done
 
-[[ -n "$MODEL" ]] || { echo "ERROR: model is empty" >&2; exit 2; }
-for n in NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS TIMEOUT_SEC CONNECT_TIMEOUT_SEC CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT; do
+for n in NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS TIMEOUT_SEC CONNECT_TIMEOUT_SEC CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT SERVER_LOG_LINES; do
   is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }
 done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
@@ -157,6 +189,13 @@ SUMMARY_MD="$RUN_DIR/summary.md"
 TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 META="$RUN_DIR/meta.txt"
 ERRORS_FILE="$RUN_DIR/errors.log"
+FAILURE_HINTS="$RUN_DIR/failure-hints.txt"
+SERVER_LOG_TAIL="$RUN_DIR/ollama-server-log-tail.txt"
+WSL_DIAG="$RUN_DIR/wsl-diagnostics.txt"
+API_VERSION_FILE="$RUN_DIR/ollama-api-version.json"
+API_TAGS_FILE="$RUN_DIR/ollama-api-tags.json"
+API_SHOW_FILE="$RUN_DIR/ollama-api-show-model.json"
+OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 mkdir -p "$RUN_DIR" "$RAW_DIR" "$PAYLOAD_DIR" "$TMP_DIR"
 : >"$ERRORS_FILE"
 
@@ -177,6 +216,87 @@ ensure_server() {
   curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" "$BASE_URL/api/tags" >/dev/null 2>&1 || {
     echo "ERROR: Ollama server still not reachable at $BASE_URL" >&2; exit 3;
   }
+}
+
+
+ollama_model_names() {
+  curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" 2>/dev/null | jq -r '.models[]? | (.name // .model // empty)' | awk 'NF' | sort -u
+}
+
+print_available_models() {
+  local names
+  names="$(ollama_model_names || true)"
+  echo "Available local Ollama models at $BASE_URL:"
+  if [[ -n "$names" ]]; then
+    printf '%s\n' "$names" | sed 's/^/  - /'
+  else
+    echo "  (none detected, or /api/tags did not return model names)"
+  fi
+}
+
+resolve_model_pattern() {
+  local pattern="$1"
+  local names matches
+  [[ -n "$pattern" ]] || return 2
+  names="$(ollama_model_names || true)"
+  [[ -n "$names" ]] || return 4
+
+  matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
+    BEGIN{pl=tolower(p)}
+    {n=$0; nl=tolower(n); split(n,a,":"); bl=tolower(a[1]); if(n==p || nl==pl || a[1]==p || bl==pl) print n}
+  ' | sort -u)"
+  if [[ -z "$matches" ]]; then
+    matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
+      BEGIN{pl=tolower(p)}
+      {n=$0; if(index(tolower(n),pl)>0) print n}
+    ' | sort -u)"
+  fi
+
+  local count
+  count="$(printf '%s\n' "$matches" | awk 'NF{c++} END{print c+0}')"
+  if [[ "$count" == "1" ]]; then
+    printf '%s\n' "$matches" | awk 'NF{print; exit}'
+    return 0
+  fi
+  if [[ "$count" -gt 1 ]]; then
+    echo "ERROR: model pattern '$pattern' is ambiguous. Matching local models:" >&2
+    printf '%s\n' "$matches" | sed 's/^/  - /' >&2
+    return 5
+  fi
+  return 4
+}
+
+select_or_explain_model() {
+  local pattern="$1" resolved rc
+  if [[ -z "$pattern" ]]; then
+    echo "ERROR: model pattern is required." >&2
+    print_available_models >&2 || true
+    echo >&2
+    usage >&2
+    trap - EXIT INT TERM 2>/dev/null || true
+    exit 2
+  fi
+  set +e
+  resolved="$(resolve_model_pattern "$pattern")"
+  rc=$?
+  set -e
+  if [[ "$rc" == "0" && -n "$resolved" ]]; then
+    MODEL="$resolved"
+    MODEL_PATTERN="$pattern"
+    return 0
+  fi
+  if [[ "$rc" == "5" ]]; then
+    echo >&2
+    usage >&2
+    trap - EXIT INT TERM 2>/dev/null || true
+    exit 5
+  fi
+  echo "ERROR: no local Ollama model matched pattern '$pattern'." >&2
+  print_available_models >&2 || true
+  echo >&2
+  usage >&2
+  trap - EXIT INT TERM 2>/dev/null || true
+  exit 4
 }
 
 model_available() {
@@ -204,7 +324,8 @@ write_meta() {
     echo "signature=$SCRIPT_SIGNATURE"
     echo "run_id=$RUN_ID"
     echo "run_dir=$RUN_DIR"
-    echo "model=$MODEL"
+    echo "requested_model=${MODEL_PATTERN:-$MODEL}"
+    echo "resolved_model=$MODEL"
     echo "base_url=$BASE_URL"
     echo "think=$THINK"
     echo "num_ctx=$NUM_CTX"
@@ -225,6 +346,8 @@ write_meta() {
     echo "vram_ctx=$VRAM_CTX"
     echo "vram_num_predict=$VRAM_NUM_PREDICT"
     echo "prompt_prefix=$PROMPT_PREFIX"
+    echo "server_log_lines=$SERVER_LOG_LINES"
+    echo "capture_wsl_diagnostics=$CAPTURE_WSL_DIAGNOSTICS"
     echo
     echo "## environment"; date -Is; uname -a || true
     if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds || true; fi
@@ -259,8 +382,202 @@ capture_dmesg_gpu_errors() {
   } >"$RUN_DIR/dmesg-gpu-errors.txt"
 }
 
+
+capture_wsl_diagnostics() {
+  [[ "$CAPTURE_WSL_DIAGNOSTICS" == "1" ]] || { echo "WSL diagnostics disabled" >"$WSL_DIAG"; return 0; }
+  {
+    echo "# WSL / Windows diagnostics"
+    echo "timestamp=$(date -Is)"
+    echo
+    echo "## Linux kernel"
+    uname -a 2>&1 || true
+    cat /proc/version 2>/dev/null || true
+    echo
+    echo "## kernel command line"
+    cat /proc/cmdline 2>/dev/null || true
+    echo
+    echo "## /etc/wsl.conf"
+    if [[ -f /etc/wsl.conf ]]; then sed -n '1,220p' /etc/wsl.conf; else echo "not present"; fi
+    echo
+    echo "## WSL GPU path"
+    ls -l /usr/lib/wsl/lib/nvidia-smi 2>&1 || true
+    command -v nvidia-smi 2>&1 || true
+    echo
+    echo "## WSL commands from Windows interop"
+    if command -v wsl.exe >/dev/null 2>&1; then
+      wsl.exe --version 2>&1 | tr -d '\r' || true
+      echo
+      wsl.exe --status 2>&1 | tr -d '\r' || true
+      echo
+      wsl.exe --list --verbose 2>&1 | tr -d '\r' || true
+    else
+      echo "wsl.exe not available from this WSL session"
+    fi
+    echo
+    echo "## Windows user .wslconfig"
+    local upath=""
+    if command -v powershell.exe >/dev/null 2>&1; then
+      upath="$(powershell.exe -NoProfile -Command '$env:USERPROFILE' 2>/dev/null | tr -d '\r' | tail -1)"
+    elif command -v cmd.exe >/dev/null 2>&1; then
+      upath="$(cmd.exe /C echo %USERPROFILE% 2>/dev/null | tr -d '\r' | tail -1)"
+    fi
+    if [[ -n "$upath" ]] && command -v wslpath >/dev/null 2>&1; then
+      local ulinux
+      ulinux="$(wslpath -u "$upath" 2>/dev/null || true)"
+      echo "windows_userprofile=$upath"
+      echo "wsl_userprofile=$ulinux"
+      if [[ -n "$ulinux" && -f "$ulinux/.wslconfig" ]]; then
+        sed -n '1,220p' "$ulinux/.wslconfig"
+      else
+        echo ".wslconfig not found at resolved user profile"
+      fi
+    else
+      echo "unable to resolve Windows user profile"
+    fi
+  } >"$WSL_DIAG" 2>&1 || true
+}
+
+capture_ollama_server_log_tail() {
+  {
+    echo "# Ollama server log tail"
+    echo "timestamp=$(date -Is)"
+    echo "lines=$SERVER_LOG_LINES"
+    echo
+    echo "## running Ollama processes"
+    pgrep -a -f 'ollama( serve| runner| pull|$)' 2>/dev/null || true
+    echo
+    if command -v systemctl >/dev/null 2>&1; then
+      echo "## systemctl status ollama.service"
+      systemctl status ollama.service --no-pager 2>&1 | tail -n "$SERVER_LOG_LINES" || true
+      echo
+    fi
+    if command -v journalctl >/dev/null 2>&1; then
+      echo "## journalctl -u ollama.service"
+      journalctl -u ollama.service --no-pager -n "$SERVER_LOG_LINES" 2>&1 || true
+      echo
+      echo "## journalctl --user -u ollama.service"
+      journalctl --user -u ollama.service --no-pager -n "$SERVER_LOG_LINES" 2>&1 || true
+      echo
+    fi
+    echo "## common log files"
+    local f
+    for f in "$HOME/log/ollama-serve.log" "$HOME/.ollama/logs/server.log" "/var/log/ollama.log"; do
+      echo "--- $f"
+      if [[ -f "$f" ]]; then tail -n "$SERVER_LOG_LINES" "$f" 2>&1 || true; else echo "not found"; fi
+      echo
+    done
+  } >"$SERVER_LOG_TAIL" 2>&1 || true
+}
+
+collect_preflight_diagnostics() {
+  curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" "$BASE_URL/api/version" >"$API_VERSION_FILE" 2>"$RUN_DIR/ollama-api-version.stderr" || true
+  curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" "$BASE_URL/api/tags" >"$API_TAGS_FILE" 2>"$RUN_DIR/ollama-api-tags.stderr" || true
+  jq -nc --arg model "$MODEL" '{model:$model, verbose:true}' >"$RUN_DIR/ollama-api-show-request.json"
+  curl -fsS --connect-timeout "$CONNECT_TIMEOUT_SEC" -H 'Content-Type: application/json' -d "@$RUN_DIR/ollama-api-show-request.json" "$BASE_URL/api/show" >"$API_SHOW_FILE" 2>"$RUN_DIR/ollama-api-show-model.stderr" || true
+  if command -v ollama >/dev/null 2>&1; then
+    {
+      echo "# ollama show $MODEL"
+      ollama show "$MODEL" 2>&1 || true
+      echo
+      echo "# ollama show --modelfile $MODEL"
+      ollama show --modelfile "$MODEL" 2>&1 || true
+      echo
+      echo "# ollama list"
+      ollama list 2>&1 || true
+    } >"$OLLAMA_SHOW_FILE" 2>&1 || true
+  fi
+  capture_wsl_diagnostics || true
+}
+
+extract_blob_path_from_text() {
+  grep -oE '/[^[:space:]"'"'"']*sha256-[0-9a-f]{32,64}' <<<"$1" | head -1 || true
+}
+
+model_size_gib() {
+  if [[ -s "$API_TAGS_FILE" ]]; then
+    jq -r --arg m "$MODEL" '.models[]? | select(.name==$m or .model==$m) | (.size // empty)' "$API_TAGS_FILE" 2>/dev/null \
+      | awk 'NF{printf "%.2f", $1/1024/1024/1024; exit}'
+  fi
+}
+
+free_vram_before_gib() {
+  local f="$RUN_DIR/nvidia-smi-query-before.csv"
+  [[ -s "$f" ]] || return 0
+  awk -F',' '
+    function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
+    NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
+    NR==2{used=trim($(h["memory.used [MiB]"])); total=trim($(h["memory.total [MiB]"])); if(total>0){printf "%.2f", (total-used)/1024}; exit}' "$f" 2>/dev/null || true
+}
+
+make_failure_hints() {
+  local first_body="" first_class="" body class f count=0 blob model_gib free_gib
+  {
+    echo "# RTX 3090 Ollama failure hints"
+    echo "timestamp=$(date -Is)"
+    echo "requested_model=${MODEL_PATTERN:-$MODEL}"
+    echo "resolved_model=$MODEL"
+    echo "base_url=$BASE_URL"
+    echo
+  } >"$FAILURE_HINTS"
+  shopt -s nullglob
+  for f in "$RAW_DIR"/*.json; do
+    body="$(error_body_from_raw "$f" "${f%.json}.stderr")"
+    [[ -n "$body" ]] || continue
+    class="$(classify_failure 0 000 "$body" "${f%.json}.stderr")"
+    if [[ -z "$first_body" ]]; then first_body="$body"; first_class="$class"; fi
+    count=$((count + 1))
+  done
+  shopt -u nullglob
+  if [[ "$count" -eq 0 ]]; then
+    {
+      echo "primary_error_class=none"
+      echo "api_error_rows=0"
+      echo "first_api_error="
+      echo "likely_cause=no API error bodies found"
+      echo "next_action=review summary.csv and raw JSON for non-error anomalies"
+    } >>"$FAILURE_HINTS"
+    return 0
+  fi
+  {
+    echo "primary_error_class=$first_class"
+    echo "api_error_rows=$count"
+    echo "first_api_error=$(printf '%s' "$first_body" | tr '\n' ' ' | cut -c1-900)"
+    blob="$(extract_blob_path_from_text "$first_body")"
+    if [[ -n "$blob" ]]; then
+      echo "referenced_blob=$blob"
+      echo "blob_stat_command=stat '$blob' && sha256sum '$blob'"
+    fi
+    model_gib="$(model_size_gib || true)"
+    free_gib="$(free_vram_before_gib || true)"
+    [[ -n "$model_gib" ]] && echo "model_size_gib=$model_gib"
+    [[ -n "$free_gib" ]] && echo "free_vram_before_gib=$free_gib"
+    case "$first_class" in
+      model_load_error|model_file_or_manifest_error)
+        echo "likely_cause=Ollama accepted the model manifest but the runner could not open/load a referenced blob; most likely corrupt/incomplete model storage, permission mismatch, or an edge-of-VRAM load path."
+        echo "next_action=stop concurrent ollama pulls, inspect the referenced blob path, capture ollama-server-log-tail.txt, then recreate or repull the model before rerunning the benchmark."
+        ;;
+      memory_allocation_error)
+        echo "likely_cause=model/context/concurrency combination exceeded available VRAM or host memory."
+        echo "next_action=reduce context/concurrency, free display/WSLg VRAM, enable Flash Attention/KV-cache testing, or use a smaller quant/model."
+        ;;
+      request_timeout|curl_transport_error)
+        echo "likely_cause=Ollama API transport or server availability issue."
+        echo "next_action=check Ollama service status, server logs, WSL networking/DNS, and retry with a tiny model."
+        ;;
+      *)
+        echo "likely_cause=unclassified Ollama/API failure; inspect raw/*.json, raw/*.stderr, and server logs."
+        echo "next_action=rerun with --server-log-lines 500 and include the generated archive."
+        ;;
+    esac
+    if pgrep -f 'ollama pull' >/dev/null 2>&1; then
+      echo "concurrent_pull_observed_now=yes"
+      echo "concurrent_pull_note=Avoid benchmarking while ollama pull is running; it can contend for model-store IO and mutate model blobs/manifests."
+    fi
+  } >>"$FAILURE_HINTS"
+}
+
 csv_header() {
-  printf '%s\n' 'timestamp,category,test,model,num_ctx,num_predict,mode,concurrency,request_wall_s,response_chars,thinking_chars,done_reason,total_s,load_s,prompt_eval_tokens,eval_tokens,prompt_tps,gen_tps,prompt_eval_s,eval_s,prompt_chars,prompt_words,context_fill_pct,error,raw_json,payload_json' >"$SUMMARY_CSV"
+  printf '%s\n' 'timestamp,category,test,model,num_ctx,num_predict,mode,concurrency,request_wall_s,response_chars,thinking_chars,done_reason,total_s,load_s,prompt_eval_tokens,eval_tokens,prompt_tps,gen_tps,prompt_eval_s,eval_s,prompt_chars,prompt_words,context_fill_pct,error,http_code,error_class,error_body,raw_json,payload_json' >"$SUMMARY_CSV"
   printf '%s\n' 'timestamp,concurrency,wall_s,total_eval_tokens,total_response_chars,aggregate_gen_tps,requests_ok,requests_error,raw_glob' >"$CONC_AGG_CSV"
   printf '%s\n' 'timestamp,iterations,wall_s,total_eval_tokens,aggregate_gen_tps,errors' >"$SOAK_SUMMARY_CSV"
 }
@@ -292,49 +609,95 @@ append_csv_line() {
   rmdir "$lock"
 }
 
+error_body_from_raw() {
+  local raw_file="$1" stderr_file="$2" body=""
+  if [[ -s "$raw_file" ]] && jq -e . "$raw_file" >/dev/null 2>&1; then
+    body="$(jq -r '.error // .message // .detail // empty' "$raw_file" 2>/dev/null | head -c 1200)"
+  fi
+  if [[ -z "$body" && -s "$raw_file" ]]; then
+    body="$(head -c 1200 "$raw_file" | tr '\n' ' ')"
+  fi
+  if [[ -z "$body" && -s "$stderr_file" ]]; then
+    body="$(head -c 1200 "$stderr_file" | tr '\n' ' ')"
+  fi
+  printf '%s' "$body"
+}
+
+classify_failure() {
+  local rc="$1" http_code="$2" body="$3" stderr_file="${4:-}" text lc
+  text="$body"
+  if [[ -z "$text" && -n "$stderr_file" && -s "$stderr_file" ]]; then text="$(tr '\n' ' ' <"$stderr_file")"; fi
+  lc="$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$rc" == "124" || "$rc" == "137" ]]; then printf 'request_timeout'; return 0; fi
+  if [[ "$rc" != "0" && "$http_code" == "000" ]]; then printf 'curl_transport_error'; return 0; fi
+  if grep -qiE 'unable to load model' <<<"$text"; then printf 'model_load_error'; return 0; fi
+  if grep -qiE 'no such file|cannot find|not found|missing|bad manifest|bad file|invalid file|checksum|sha256' <<<"$text"; then printf 'model_file_or_manifest_error'; return 0; fi
+  if grep -qiE 'out of memory|cuda.*memory|memory allocation|insufficient.*memory|failed to allocate|no memory|oom' <<<"$text"; then printf 'memory_allocation_error'; return 0; fi
+  if grep -qiE 'permission denied|operation not permitted|access denied' <<<"$text"; then printf 'permission_error'; return 0; fi
+  if [[ "$http_code" =~ ^5 ]]; then printf 'ollama_server_error_%s' "$http_code"; return 0; fi
+  if [[ "$http_code" =~ ^4 ]]; then printf 'ollama_client_error_%s' "$http_code"; return 0; fi
+  if [[ "$rc" != "0" ]]; then printf 'curl_failed_rc_%s' "$rc"; return 0; fi
+  printf 'api_error'
+}
+
 append_summary_from_json() {
-  local category="$1" test_name="$2" model_name="$3" mode="$4" conc="$5" np="$6" ctx="$7" raw_file="$8" payload_file="$9" wall_s="${10}" prompt_chars="${11}" prompt_words="${12}" err_msg="${13:-}"
+  local category="$1" test_name="$2" model_name="$3" mode="$4" conc="$5" np="$6" ctx="$7" raw_file="$8" payload_file="$9" wall_s="${10}" prompt_chars="${11}" prompt_words="${12}" err_msg="${13:-}" http_code="${14:-}" error_class="${15:-}" error_body="${16:-}"
   local line
+  [[ -n "$http_code" ]] || http_code=""
+  [[ -n "$error_class" ]] || error_class="$err_msg"
   if [[ -n "$err_msg" ]]; then
-    line="$(jq -rn --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg err "$err_msg" --arg raw "$raw_file" --arg payload "$payload_file" \
-      '[$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,"","","","","","","","","","","",$pc,$pw,"",$err,$raw,$payload] | @csv')"
+    line="$(jq -rn --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg err "$err_msg" --arg http "$http_code" --arg cls "$error_class" --arg body "$error_body" --arg raw "$raw_file" --arg payload "$payload_file" \
+      '[$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,"","","","","","","","","","","",$pc,$pw,"",$err,$http,$cls,$body,$raw,$payload] | @csv')"
     append_csv_line "$line"
     return 0
   fi
-  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg raw "$raw_file" --arg payload "$payload_file" '
+  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg http "$http_code" --arg raw "$raw_file" --arg payload "$payload_file" '
     def sec(ns): if ns == null then null else (ns / 1000000000) end;
     def tps(tokens; ns): if tokens == null or ns == null or ns == 0 then null else (tokens / (ns / 1000000000)) end;
     def fill(tokens; ctx): if tokens == null or ctx == null or (ctx|tonumber)==0 then null else (100 * (tokens|tonumber) / (ctx|tonumber)) end;
-    [$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,((.response // "")|length),((.thinking // "")|length),(.done_reason // ""),(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),(.eval_count//""),(tps(.prompt_eval_count;.prompt_eval_duration)//""),(tps(.eval_count;.eval_duration)//""),(sec(.prompt_eval_duration)//""),(sec(.eval_duration)//""),$pc,$pw,(fill(.prompt_eval_count;$ctx)//""),"",$raw,$payload] | @csv' "$raw_file")"
+    [$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,((.response // "")|length),((.thinking // "")|length),(.done_reason // ""),(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),(.eval_count//""),(tps(.prompt_eval_count;.prompt_eval_duration)//""),(tps(.eval_count;.eval_duration)//""),(sec(.prompt_eval_duration)//""),(sec(.eval_duration)//""),$pc,$pw,(fill(.prompt_eval_count;$ctx)//""),"",$http,"","",$raw,$payload] | @csv' "$raw_file")"
   append_csv_line "$line"
 }
 
 run_generate() {
   local category="$1" test_name="$2" model_name="$3" mode="$4" conc="$5" np="$6" ctx="$7" prompt="$8" step_label="${9:-?}"
-  local payload_file="$PAYLOAD_DIR/$test_name.json" raw_file="$RAW_DIR/$test_name.json" stderr_file="$RAW_DIR/$test_name.stderr" rc=0 start_ns end_ns wall_s prompt_chars prompt_words
+  local payload_file="$PAYLOAD_DIR/$test_name.json" raw_file="$RAW_DIR/$test_name.json" stderr_file="$RAW_DIR/$test_name.stderr" http_file="$RAW_DIR/$test_name.http" rc=0 start_ns end_ns wall_s prompt_chars prompt_words http_code error_body error_class
   prompt_chars="${#prompt}"
   prompt_words="$(prompt_word_count "$prompt")"
   build_payload "$model_name" "$prompt" "$np" "$ctx" "$mode" >"$payload_file"
   log "START [$step_label/$PLANNED_TESTS] $test_name: category=$category model=$model_name mode=$mode ctx=$ctx predict=$np conc=$conc prompt_words=$prompt_words"
   start_ns="$(date +%s%N)"
   set +e
-  timeout -k 10s "$TIMEOUT_SEC" curl -sS --fail-with-body --connect-timeout "$CONNECT_TIMEOUT_SEC" --max-time "$TIMEOUT_SEC" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" "$BASE_URL/api/generate" >"$raw_file" 2>"$stderr_file"
+  timeout -k 10s "$TIMEOUT_SEC" curl -sS --connect-timeout "$CONNECT_TIMEOUT_SEC" --max-time "$TIMEOUT_SEC" -H 'Content-Type: application/json' -H 'Accept: application/json' -d "@$payload_file" --output "$raw_file" --write-out '%{http_code}' "$BASE_URL/api/generate" >"$http_file" 2>"$stderr_file"
   rc=$?
   set -e
   end_ns="$(date +%s%N)"
   wall_s="$(awk -v s="$start_ns" -v e="$end_ns" 'BEGIN{printf "%.6f", (e-s)/1000000000}')"
-  if [[ "$rc" -ne 0 ]]; then
-    warn "$test_name failed rc=$rc stderr=$(tr '\n' ' ' <"$stderr_file" | cut -c1-300)"
-    append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "curl_failed_rc_$rc"
+  http_code="$(tr -dc '0-9' <"$http_file" 2>/dev/null | tail -c 3)"
+  [[ -n "$http_code" ]] || http_code="000"
+
+  if [[ "$rc" -ne 0 || ! "$http_code" =~ ^2 ]]; then
+    error_body="$(error_body_from_raw "$raw_file" "$stderr_file")"
+    error_class="$(classify_failure "$rc" "$http_code" "$error_body" "$stderr_file")"
+    warn "$test_name failed rc=$rc http=$http_code class=$error_class body=$(printf '%s' "$error_body" | tr '\n' ' ' | cut -c1-500) stderr=$(tr '\n' ' ' <"$stderr_file" | cut -c1-240)"
+    append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "$error_class" "$http_code" "$error_class" "$error_body"
     return 0
   fi
   if ! jq -e . "$raw_file" >/dev/null 2>&1; then
-    warn "$test_name returned non-JSON"
-    append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "non_json_response"
+    error_body="$(error_body_from_raw "$raw_file" "$stderr_file")"
+    warn "$test_name returned non-JSON http=$http_code body=$(printf '%s' "$error_body" | tr '\n' ' ' | cut -c1-500)"
+    append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "non_json_response" "$http_code" "non_json_response" "$error_body"
     return 0
   fi
-  append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words"
-  jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" '"DONE  [\($step)/\($planned)] done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" || true
+  if jq -e 'has("error")' "$raw_file" >/dev/null 2>&1; then
+    error_body="$(error_body_from_raw "$raw_file" "$stderr_file")"
+    error_class="$(classify_failure "$rc" "$http_code" "$error_body" "$stderr_file")"
+    warn "$test_name returned API error http=$http_code class=$error_class body=$(printf '%s' "$error_body" | tr '\n' ' ' | cut -c1-500)"
+    append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "$error_class" "$http_code" "$error_class" "$error_body"
+    return 0
+  fi
+  append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "" "$http_code" "" ""
+  jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" --arg http "$http_code" '"DONE  [\($step)/\($planned)] http=" + $http + " done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" || true
 }
 
 with_prefix() { if [[ -n "$PROMPT_PREFIX" ]]; then printf '%s\n%s' "$PROMPT_PREFIX" "$1"; else printf '%s' "$1"; fi; }
@@ -409,15 +772,24 @@ make_summary_md() {
       END{printf "- status_basis: rows=%d errors=%d visible=%d thinking_only=%d\n", rows, errors, visible, thinkonly; if(warmn>0) printf "- warm_single_gpu_tps_avg: %.2f across %d rows\n", warmsum/warmn, warmn; printf "- cold_load_s: %.2f\n", cold; printf "- long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% gen_tps=%.2f verdict=%s\n", longpe, longctx, longfill, longgen, (longfill>=minfill?"OK":"UNDERFILLED")}' "$SUMMARY_CSV"
     if [[ -s "$CONC_AGG_CSV" ]]; then echo; echo "## Concurrency aggregate"; echo '```csv'; cat "$CONC_AGG_CSV"; echo '```'; fi
     if [[ -s "$SOAK_SUMMARY_CSV" ]]; then echo; echo "## Soak aggregate"; echo '```csv'; cat "$SOAK_SUMMARY_CSV"; echo '```'; fi
+    if [[ -s "$FAILURE_HINTS" ]]; then echo; echo "## Failure hints"; echo '```text'; cat "$FAILURE_HINTS"; echo '```'; fi
+    echo; echo "## Preflight diagnostics"; echo
+    echo "- API version: $API_VERSION_FILE"
+    echo "- API tags: $API_TAGS_FILE"
+    echo "- API show model: $API_SHOW_FILE"
+    echo "- ollama show/list: $OLLAMA_SHOW_FILE"
+    echo "- WSL diagnostics: $WSL_DIAG"
+    echo "- Ollama server log tail: $SERVER_LOG_TAIL"
     echo; echo "## Test results"; echo
     awk -F',' '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-      {test=unq($(h["test"])); cat=unq($(h["category"])); mode=unq($(h["mode"])); ctx=unq($(h["num_ctx"])); np=unq($(h["num_predict"])); reason=unq($(h["done_reason"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"])); eval=unq($(h["eval_tokens"])); prompt=unq($(h["prompt_eval_tokens"])); fill=unq($(h["context_fill_pct"])); total=unq($(h["total_s"])); if(NR==2){print "| Test | Category | Mode | Ctx | Predict | Prompt tok | Fill % | Eval tok | Gen tok/s | Total s | Done | Error |"; print "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|"}; if(gen!="") gen=sprintf("%.2f", gen); if(total!="") total=sprintf("%.2f", total); if(fill!="") fill=sprintf("%.1f", fill); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", test, cat, mode, ctx, np, prompt, fill, eval, gen, total, reason, err}' "$SUMMARY_CSV"
+      {test=unq($(h["test"])); cat=unq($(h["category"])); mode=unq($(h["mode"])); ctx=unq($(h["num_ctx"])); np=unq($(h["num_predict"])); reason=unq($(h["done_reason"])); err=unq($(h["error"])); http=unq($(h["http_code"])); cls=unq($(h["error_class"])); body=unq($(h["error_body"])); gen=unq($(h["gen_tps"])); eval=unq($(h["eval_tokens"])); prompt=unq($(h["prompt_eval_tokens"])); fill=unq($(h["context_fill_pct"])); total=unq($(h["total_s"])); gsub(/[|]/,"/",body); if(length(body)>160) body=substr(body,1,157)"..."; if(NR==2){print "| Test | Category | Mode | Ctx | Predict | Prompt tok | Fill % | Eval tok | Gen tok/s | Total s | HTTP | Class | Done/Error body |"; print "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"}; if(gen!="") gen=sprintf("%.2f", gen); if(total!="") total=sprintf("%.2f", total); if(fill!="") fill=sprintf("%.1f", fill); final=(body!=""?body:reason); if(cls=="") cls=err; printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", test, cat, mode, ctx, np, prompt, fill, eval, gen, total, http, cls, final}
+    ' "$SUMMARY_CSV"
     echo; echo "## Ollama loaded models after test"; echo '```text'; cat "$RUN_DIR/ollama-ps-after.txt" 2>/dev/null || true; echo '```'
     echo; echo "## NVIDIA snapshot after test"; echo '```text'; cat "$RUN_DIR/nvidia-smi-after.txt" 2>/dev/null || true; echo '```'
     echo; echo "## dmesg GPU/error scan"; echo '```text'; cat "$RUN_DIR/dmesg-gpu-errors.txt" 2>/dev/null || true; echo '```'
-    echo; echo "## Files"; echo "- terminal summary: $TERMINAL_SUMMARY"; echo "- CSV: $SUMMARY_CSV"; echo "- concurrency aggregate CSV: $CONC_AGG_CSV"; echo "- soak summary CSV: $SOAK_SUMMARY_CSV"; echo "- raw JSON: $RAW_DIR"; echo "- payload JSON: $PAYLOAD_DIR"; echo "- meta: $META"
+    echo; echo "## Files"; echo "- terminal summary: $TERMINAL_SUMMARY"; echo "- CSV: $SUMMARY_CSV"; echo "- concurrency aggregate CSV: $CONC_AGG_CSV"; echo "- soak summary CSV: $SOAK_SUMMARY_CSV"; echo "- failure hints: $FAILURE_HINTS"; echo "- Ollama server log tail: $SERVER_LOG_TAIL"; echo "- WSL diagnostics: $WSL_DIAG"; echo "- raw JSON: $RAW_DIR"; echo "- payload JSON: $PAYLOAD_DIR"; echo "- meta: $META"
   } >"$SUMMARY_MD"
 }
 
@@ -433,7 +805,10 @@ make_terminal_summary() {
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
       {rows++; cat=unq($(h["category"])); mode=unq($(h["mode"])); conc=unq($(h["concurrency"])); err=unq($(h["error"])); gen=unq($(h["gen_tps"]))+0; total=unq($(h["total_s"]))+0; load=unq($(h["load_s"]))+0; resp=unq($(h["response_chars"]))+0; think=unq($(h["thinking_chars"]))+0; pe=unq($(h["prompt_eval_tokens"]))+0; ctx=unq($(h["num_ctx"]))+0; fill=unq($(h["context_fill_pct"]))+0; if(err!="") errors++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>cold_load)cold_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warm_n++; warm_sum+=gen; if(warm_n==1||gen>warm_max)warm_max=gen; if(warm_n==1||gen<warm_min)warm_min=gen}; if(cat=="longctx"){long_gen=gen; long_fill=fill; long_pe=pe; long_ctx=ctx}; if(total>max_total)max_total=total}
-      END{status=(errors>0?"FAIL":((think_only>0||long_fill<minfill)?"PASS_WITH_WARNINGS":"PASS")); printf "Status  : %s\n", status; if(warm_n>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs; max total %.2fs\n", cold_load, max_total; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", long_pe, long_ctx, long_fill, long_gen, (long_fill>=minfill?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, think_only, errors}' "$SUMMARY_CSV"
+      END{status=(errors>0?"FAIL":((think_only>0||long_fill<minfill)?"PASS_WITH_WARNINGS":"PASS")); printf "Status  : %s\n", status; if(warm_n>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs; max total %.2fs\n", cold_load, max_total; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", long_pe, long_ctx, long_fill, long_gen, (long_fill>=minfill?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, think_only, errors; if(errors>0 && visible==0) print "Verdict : inference-health INCONCLUSIVE; model never produced usable tokens"}' "$SUMMARY_CSV"
+    if [[ -s "$FAILURE_HINTS" ]]; then
+      awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$FAILURE_HINTS" | head -5
+    fi
     if [[ -s "$CONC_AGG_CSV" ]]; then
       awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); return s} NR==2{printf "Conc    : x%s aggregate %.2f tok/s over %.2fs; ok=%s err=%s\n", unq($2), unq($6)+0, unq($3)+0, unq($7), unq($8)}' "$CONC_AGG_CSV"
     fi
@@ -444,9 +819,9 @@ make_terminal_summary() {
     awk -F',' '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-      NR<=13{test=unq($(h["test"])); cat=unq($(h["category"])); mode=unq($(h["mode"])); ctx=unq($(h["num_ctx"])); gen=unq($(h["gen_tps"])); prompt=unq($(h["prompt_eval_tokens"])); done=unq($(h["done_reason"])); if(gen!="") gen=sprintf("%.2f", gen); printf "  %-18s %-10s %3s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, mode, ctx, prompt, gen, done}
+      NR<=13{test=unq($(h["test"])); cat=unq($(h["category"])); mode=unq($(h["mode"])); ctx=unq($(h["num_ctx"])); gen=unq($(h["gen_tps"])); prompt=unq($(h["prompt_eval_tokens"])); done=unq($(h["done_reason"])); cls=unq($(h["error_class"])); http=unq($(h["http_code"])); if(gen!="") gen=sprintf("%.2f", gen); suffix=(cls!=""?"http="http" "cls:done); printf "  %-18s %-10s %3s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, mode, ctx, prompt, gen, suffix}
       NR==14{print "  ... additional rows omitted from terminal summary; see summary.csv"}' "$SUMMARY_CSV"
-    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
+    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; echo "  hint: $FAILURE_HINTS"; echo "  log : $SERVER_LOG_TAIL"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
     echo "============================================================"
   } >"$TERMINAL_SUMMARY"
 }
@@ -466,8 +841,17 @@ make_archive() {
 
 csv_header
 ensure_server
+if [[ "$NO_MODEL_ARGS" == "1" ]]; then
+  trap - EXIT INT TERM 2>/dev/null || true
+  print_available_models
+  echo
+  usage
+  exit 2
+fi
+select_or_explain_model "$MODEL"
 ensure_model "$MODEL"
 if [[ "$RUN_VRAM_PRESSURE" == "1" ]]; then ensure_model "${VRAM_MODEL:-$MODEL}"; fi
+collect_preflight_diagnostics
 write_meta
 snapshot_before_after before
 
@@ -520,6 +904,8 @@ fi
 run_soak
 snapshot_before_after after
 capture_dmesg_gpu_errors
+capture_ollama_server_log_tail
+make_failure_hints
 if [[ "$ZIP_ON_EXIT" == "1" ]]; then ARCHIVE_PATH="$TMP_DIR/ollama-test-RTX3090-$RUN_ID.zip"; printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"; fi
 make_summary_md
 make_terminal_summary

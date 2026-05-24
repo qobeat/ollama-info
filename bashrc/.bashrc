@@ -120,54 +120,123 @@ if ! shopt -oq posix; then
   fi
 fi
 
-# Defaults I want for day-to-day coding
-export OLLAMA_NUM_CTX=2048
-export OLLAMA_NUM_BATCH=32
-export OLLAMA_LOW_VRAM=false
+# Defaults for day-to-day coding
+# Keep user-shell conveniences here. Keep Ollama SERVER tuning in systemd service overrides,
+# because a systemd-managed ollama.service does not inherit ~/.bashrc.
+export PATH="$HOME/bin:$PATH"
+export OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 
-# Per-model tuned GPU offload
-# qwen2.5-coder:3b
-export OLLAMA_NUM_GPU=128
+# Node/NVM for local coding tools
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-export PATH="$HOME/bin:$PATH"
 
 # --- Ollama status: RTX 3090 local AI runtime ---
-ollama_status() {
-  echo "=== Ollama status ==="
+__ollama_timeout() {
+  local seconds="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$seconds" "$@"; else "$@"; fi
+}
 
-  if ! command -v ollama >/dev/null 2>&1; then
-    echo "ollama CLI: NOT FOUND"
+__ollama_systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd
+}
+
+__ollama_api_url() {
+  printf '%s\n' "${OLLAMA_URL:-http://127.0.0.1:11434}"
+}
+
+ollama_quick_status() {
+  local url version
+  url="$(__ollama_api_url)"
+  echo "=== Ollama quick status ==="
+  if command -v ollama >/dev/null 2>&1; then
+    echo "cli     : $(command -v ollama)"
+  else
+    echo "cli     : NOT FOUND"
     return 1
   fi
 
-  echo "ollama CLI: $(command -v ollama)"
-  echo "ollama CLI version:"
-  ollama --version 2>/dev/null || true
-
-  if command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= | grep -qx systemd; then
-    echo
-    echo "systemd service:"
-    systemctl is-enabled ollama 2>/dev/null | sed 's/^/enabled: /'
-    systemctl is-active ollama 2>/dev/null | sed 's/^/active : /'
+  if __ollama_systemd_available; then
+    printf 'service : '
+    systemctl is-active ollama 2>/dev/null || true
+    printf 'enabled : '
+    systemctl is-enabled ollama 2>/dev/null || true
   fi
 
-  echo
-  echo "Ollama API:"
-  if curl -fsS http://127.0.0.1:11434/api/version >/tmp/ollama-api-version.json 2>/dev/null; then
-    cat /tmp/ollama-api-version.json
-    echo
+  printf 'api     : '
+  if version="$(__ollama_timeout 1s curl -fsS "$url/api/version" 2>/dev/null)"; then
+    printf '%s %s\n' "$url" "$version"
   else
-    echo "NOT RESPONDING on http://127.0.0.1:11434"
+    printf 'NOT RESPONDING at %s\n' "$url"
   fi
 
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    printf 'gpu     : '
+    __ollama_timeout 1s nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null \
+      | awk -F',' '{gsub(/^ +| +$/, "", $1); gsub(/^ +| +$/, "", $2); gsub(/^ +| +$/, "", $3); gsub(/^ +| +$/, "", $4); gsub(/^ +| +$/, "", $5); printf "%s temp=%sC vram=%s/%sMiB util=%s%%\n", $1,$2,$3,$4,$5}' \
+      || echo "nvidia-smi not responding"
+  fi
+  echo "commands: ollama_status | ollama_models | ollama_gpu | ollama_logs [N] | ollama_test <model-pattern>"
+}
+
+ollama_models() {
+  ollama list
+}
+
+ollama_gpu() {
+  nvidia-smi --query-gpu=timestamp,name,driver_version,temperature.gpu,power.draw,power.limit,utilization.gpu,utilization.memory,memory.used,memory.total,pcie.link.gen.current,pcie.link.width.current --format=csv
+}
+
+ollama_logs() {
+  local lines="${1:-120}"
+  if __ollama_systemd_available && systemctl list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+    journalctl -u ollama -n "$lines" --no-pager
+  elif __ollama_systemd_available && systemctl --user list-unit-files 2>/dev/null | grep -q '^ollama\.service'; then
+    journalctl --user -u ollama -n "$lines" --no-pager
+  elif [ -f "$HOME/log/ollama-serve.log" ]; then
+    tail -n "$lines" "$HOME/log/ollama-serve.log"
+  else
+    echo "No known Ollama log source found. Try: systemctl status ollama"
+    return 1
+  fi
+}
+
+ollama_status() {
+  echo "=== Ollama full status ==="
+  ollama_quick_status
+  echo
+  echo "Ollama CLI version:"
+  ollama --version 2>/dev/null || true
+  echo
+  echo "Loaded models / runners:"
+  ollama ps 2>/dev/null || true
   echo
   echo "Downloaded models:"
   ollama list 2>/dev/null || true
+  echo
+  echo "Recent service logs:"
+  ollama_logs 40 2>/dev/null || true
 }
 
+ollama_test() {
+  local pattern="${1:-}"
+  if [ -z "$pattern" ]; then
+    echo "Usage: ollama_test <model-pattern> [extra ollama-test-and-monitor-RTX3090.sh options]"
+    echo "Example: ollama_test qwen3.6 --no-conc"
+    return 2
+  fi
+  shift || true
+  ollama-test-and-monitor-RTX3090.sh "$pattern" "$@"
+}
 
-if [[ $- == *i* ]]; then
+alias os='ollama_status'
+alias om='ollama_models'
+alias og='ollama_gpu'
+alias ol='ollama_logs'
+alias ot='ollama_test'
+
+# Show fast status once per interactive terminal. Disable with: export OLLAMA_BASHRC_STATUS=0
+if [[ $- == *i* && "${OLLAMA_BASHRC_STATUS:-1}" == "1" && -z "${OLLAMA_STATUS_SHOWN:-}" ]]; then
+  export OLLAMA_STATUS_SHOWN=1
   echo
-  ollama_status
+  ollama_quick_status
 fi

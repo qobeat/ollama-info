@@ -4,32 +4,41 @@ set -Eeuo pipefail
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 LOG_DIR="${LOG_DIR:-$HOME/log}"
 LOG_FILE="${OLLAMA_SERVE_LOG:-$LOG_DIR/ollama-serve.log}"
-WAIT_SEC="${WAIT_SEC:-10}"
+WAIT_SEC="${WAIT_SEC:-15}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 mkdir -p "$LOG_DIR"
 
-if curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; then
+has_systemd() { command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; }
+has_ollama_service() { has_systemd && systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'; }
+api_ready() { curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; }
+wait_ready() { for _ in $(seq 1 "$WAIT_SEC"); do api_ready && return 0; sleep 1; done; return 1; }
+
+if api_ready; then
   echo "Ollama server: already running at $BASE_URL"
+elif has_ollama_service; then
+  echo "Starting Ollama via systemd: ollama.service"
+  systemctl start ollama
+  wait_ready || true
 else
-  command -v ollama >/dev/null 2>&1 || { echo "ERROR: ollama CLI not found" >&2; exit 2; }
-  echo "Starting Ollama server..."
+  command -v ollama >/dev/null 2>&1 || { echo "ERROR: ollama CLI not found and ollama.service is not available" >&2; exit 2; }
+  echo "Starting Ollama server with nohup fallback..."
   nohup ollama serve >"$LOG_FILE" 2>&1 &
   pid="$!"
   echo "Ollama serve PID: $pid"
-  for _ in $(seq 1 "$WAIT_SEC"); do
-    if curl -fsS --connect-timeout 2 "$BASE_URL/api/tags" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
+  wait_ready || true
 fi
 
-if curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; then
+if api_ready; then
   echo "Ollama server: RUNNING at $BASE_URL"
 else
   echo "ERROR: Ollama server did not become ready at $BASE_URL" >&2
-  echo "Log: $LOG_FILE" >&2
+  if has_ollama_service; then
+    echo "Try: systemctl status ollama --no-pager" >&2
+    echo "Try: journalctl -u ollama -n 120 --no-pager" >&2
+  else
+    echo "Log: $LOG_FILE" >&2
+  fi
   exit 3
 fi
 

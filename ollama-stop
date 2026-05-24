@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-pkill -TERM -f "ollama runner" 2>/dev/null || true
-pkill -TERM -f "ollama serve" 2>/dev/null || true
-sleep 1
-pkill -KILL -f "ollama runner" 2>/dev/null || true
-pkill -KILL -f "ollama serve" 2>/dev/null || true
+has_systemd() { command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; }
+has_ollama_service() { has_systemd && systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'; }
+
+if has_ollama_service && [[ "${KILL_ONLY:-0}" != "1" ]]; then
+  echo "Stopping Ollama via systemd: ollama.service"
+  systemctl stop ollama || true
+else
+  echo "Stopping Ollama serve/runner processes directly"
+  pkill -TERM -f "ollama runner" 2>/dev/null || true
+  pkill -TERM -f "ollama serve" 2>/dev/null || true
+  sleep 1
+  pkill -KILL -f "ollama runner" 2>/dev/null || true
+  pkill -KILL -f "ollama serve" 2>/dev/null || true
+fi
 
 echo "Stopped Ollama server/runner processes if they were running."

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.0
+
+- Upgraded RTX test, monitor, and orchestrator scripts to v0.9 signatures.
+- Preserved HTTP status and Ollama API error body for failed generation requests.
+- Added `http_code`, `error_class`, and `error_body` columns to `summary.csv`.
+- Added `failure-hints.txt` with model-load classification, referenced blob path, likely cause, next action, model size GiB, and free VRAM when available.
+- Added preflight artifacts: `/api/version`, `/api/tags`, `/api/show`, `ollama show`, `ollama list`, WSL diagnostics, and Ollama server log tail.
+- Added `--server-log-lines`, `--wsl-diagnostics`, and `--no-wsl-diagnostics`.
+- Updated monitor reports to state whether an Ollama loaded-model snapshot was observed, preventing idle/failed-load telemetry from being misread as completed inference health.
+- Updated orchestrator summaries to mark inference health as inconclusive when tests fail before valid token generation.
+- Updated README with RTX 3090 + WSL2 setup recommendations and model-load failure remediation.
+
 ## v0.8.0
 
 - Added `ollama-download.sh`, a resumable GGUF downloader/importer for unstable WSL2 connections.

@@ -5,6 +5,18 @@ BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 MODEL_DIR="${OLLAMA_MODELS:-$HOME/.ollama/models}"
 LOG_FILE="${OLLAMA_SERVE_LOG:-$HOME/log/ollama-serve.log}"
 
+echo "=== Ollama systemd service ==="
+if command -v systemctl >/dev/null 2>&1 && ps -p 1 -o comm= 2>/dev/null | grep -qx systemd; then
+  if systemctl list-unit-files 2>/dev/null | awk '{print $1}' | grep -qx 'ollama.service'; then
+    echo -n "enabled: "; systemctl is-enabled ollama 2>/dev/null || true
+    echo -n "active : "; systemctl is-active ollama 2>/dev/null || true
+  else
+    echo "ollama.service not found"
+  fi
+else
+  echo "systemd is not PID 1 in this shell"
+fi
+
 echo "=== Ollama server ==="
 if curl -fsS --connect-timeout 3 "$BASE_URL/api/tags" >/dev/null 2>&1; then
   echo "status: RUNNING"
@@ -75,5 +87,9 @@ echo "=== Recent Ollama log lines ==="
 if [[ -f "$LOG_FILE" ]]; then
   grep -Ei "Listening|CUDA|RTX|offload|offloaded|loaded CUDA|error|warn|failure|memory|runner" "$LOG_FILE" | tail -60 || true
 else
-  echo "No log file at $LOG_FILE"
+  if command -v journalctl >/dev/null 2>&1; then
+    journalctl -u ollama -n 60 --no-pager 2>/dev/null || true
+  else
+    echo "No log file at $LOG_FILE"
+  fi
 fi

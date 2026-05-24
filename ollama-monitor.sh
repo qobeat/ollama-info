@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.7.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.7.0-rtx3090-enhanced-diagnostics"
+VERSION="0.9.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.9.0-inference-coverage-wsl-aware"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -49,7 +49,7 @@ usage() {
 ollama-monitor.sh v$VERSION
 $SCRIPT_SIGNATURE
 
-Collect RTX/NVIDIA + Ollama telemetry during local LLM runs and create a report + zip archive.
+Collect RTX 3090/NVIDIA + Ollama telemetry during local LLM runs, including whether inference actually exercised a loaded model, and create a report + zip archive.
 
 Usage:
   ./ollama-monitor.sh [options]
@@ -283,6 +283,33 @@ capture_gpu_error_scan() {
   } >"$DMESG_GPU_FILE"
 }
 
+ollama_loaded_snapshot_count() {
+  [[ -s "$OLLAMA_PS_FILE" ]] || { echo 0; return 0; }
+  awk '
+    /^[[:space:]]*$/ {next}
+    /^--- / {next}
+    /^NAME[[:space:]]/ {next}
+    /ollama CLI not found/ {next}
+    /Error:/ {next}
+    {n++}
+    END{print n+0}
+  ' "$OLLAMA_PS_FILE" 2>/dev/null || echo 0
+}
+
+ollama_api_loaded_snapshot_count() {
+  [[ -s "$OLLAMA_API_PS_FILE" ]] || { echo 0; return 0; }
+  if command -v jq >/dev/null 2>&1; then
+    jq -s '[.[] | (.api_ps.models? // []) | length] | add // 0' "$OLLAMA_API_PS_FILE" 2>/dev/null || echo 0
+  else
+    echo 0
+  fi
+}
+
+compute_app_snapshot_count() {
+  [[ -s "$COMPUTE_APPS_FILE" ]] || { echo 0; return 0; }
+  awk -F',' 'NR>1 && $2 != "" && $2 !~ /No running/ {n++} END{print n+0}' "$COMPUTE_APPS_FILE" 2>/dev/null || echo 0
+}
+
 make_archive() {
   [[ "$ZIP_ON_EXIT" == "1" ]] || return 0
   mkdir -p "$TMP_DIR"
@@ -300,6 +327,17 @@ make_archive() {
 generate_report() {
   STOP_EPOCH="$(date +%s)"
   local elapsed=$((STOP_EPOCH - START_EPOCH))
+  local loaded_cli loaded_api compute_apps exercise_verdict
+  loaded_cli="$(ollama_loaded_snapshot_count)"
+  loaded_api="$(ollama_api_loaded_snapshot_count)"
+  compute_apps="$(compute_app_snapshot_count)"
+  if [[ "$loaded_cli" -gt 0 || "$loaded_api" -gt 0 ]]; then
+    exercise_verdict="model_load_observed"
+  elif [[ "$compute_apps" -gt 0 ]]; then
+    exercise_verdict="gpu_compute_process_observed_no_ollama_model_snapshot"
+  else
+    exercise_verdict="no_model_load_observed"
+  fi
   {
     echo "# Ollama GPU Monitor Report"
     echo
@@ -330,6 +368,15 @@ generate_report() {
       NR==1{for(i=1;i<=NF;i++)idx[trim($i)]=i; next}
       {n++; gpu=num("gpu_util_pct"); temp=num("temp_c"); memtemp=raw("mem_temp_c"); vram=num("vram_used_mib"); total=num("vram_total_mib"); power=num("power_w"); pcie=num("pcie_width_current"); pmax=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(total>0 && vram>0){last_total=total; if(vram>max_vram)max_vram=vram}; if(memtemp=="" || memtemp=="N/A") memtemp_missing++; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0 && 100*vram/total>=vram_warn)vh++; if(active(hw)) hwc++; if(active(sw)) swc++; if(gpu>=busy_pct && pcie>0 && pmax>0 && pcie<pmax) pcie_warn++; if(gpu>=busy_pct && gfx>0 && gfx<busy_low_clock) lowclk++}
       END{status="PASS"; if(tc>0||hwc>0)status="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)status="PASS_WITH_CHECKS"; printf "- health_verdict: %s\n", status; printf "- temperature: max=%.0fC warn_samples=%d critical_samples=%d\n", max_temp, tw, tc; printf "- power: max=%.1fW sw_power_cap_samples=%d hw_slowdown_samples=%d\n", max_power, swc, hwc; printf "- vram: max=%.0f MiB total=%.0f MiB high_samples=%d\n", max_vram, last_total, vh; printf "- pcie: busy_width_below_max_samples=%d\n", pcie_warn; printf "- low_clock_observation_samples=%d\n", lowclk; printf "- memory_temperature_unavailable_samples=%d/%d\n", memtemp_missing, n; if(memtemp_missing>0) print "- note: RTX 3090 GDDR6X memory junction temperature may be unavailable in WSL2 nvidia-smi output."}' "$CSV"
+    echo
+    echo "## Inference exercise coverage"
+    echo "- verdict: $exercise_verdict"
+    echo "- ollama_cli_loaded_model_rows: $loaded_cli"
+    echo "- ollama_api_loaded_model_rows: $loaded_api"
+    echo "- nvidia_compute_app_rows: $compute_apps"
+    if [[ "$loaded_cli" -eq 0 && "$loaded_api" -eq 0 ]]; then
+      echo "- note: no Ollama-loaded model snapshot was observed; thermal/power/PCIe health may describe idle or failed-load telemetry, not completed inference stability."
+    fi
     echo
 
     awk -F',' \
@@ -517,6 +564,12 @@ make_terminal_summary() {
         END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Health  : %s\n", verdict; printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw_slowdown=%d sw_power_cap=%d; lowclk_obs=%d; memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$CSV"
     else
       echo "GPU     : no CSV samples"
+    fi
+    if [[ -s "$OLLAMA_PS_FILE" || -s "$OLLAMA_API_PS_FILE" ]]; then
+      loaded_cli="$(ollama_loaded_snapshot_count)"; loaded_api="$(ollama_api_loaded_snapshot_count)"; compute_apps="$(compute_app_snapshot_count)"
+      if [[ "$loaded_cli" -gt 0 || "$loaded_api" -gt 0 ]]; then ex="model-load-seen"; else ex="no-model-load-seen"; fi
+      echo "Exercise: $ex; ollama_cli_rows=$loaded_cli api_rows=$loaded_api compute_rows=$compute_apps"
+      if [[ "$loaded_cli" -eq 0 && "$loaded_api" -eq 0 ]]; then echo "Note    : inference health is inconclusive without loaded-model snapshots"; fi
     fi
     echo "Files:"
     echo "  run : $RUN_DIR"

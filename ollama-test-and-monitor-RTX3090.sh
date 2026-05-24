@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.7.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v0.7.0-orchestrator-classified-summary"
+VERSION="1.0.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.0.0-short-model-selector-bashrc"
 
-MODEL="${MODEL:-qwen3:8b}"
+MODEL="${MODEL:-}"
+MODEL_PATTERN="${MODEL_PATTERN:-}"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://localhost:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-and-monitor-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
@@ -30,6 +31,8 @@ TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 ZIP_ON_EXIT="${ZIP_ON_EXIT:-1}"
 PRINT_TERMINAL_SUMMARY="${PRINT_TERMINAL_SUMMARY:-1}"
 THINK="${THINK:-false}"
+SERVER_LOG_LINES="${SERVER_LOG_LINES:-240}"
+CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
@@ -50,10 +53,25 @@ $SCRIPT_SIGNATURE
 Run RTX 3090 Ollama tests while ollama-monitor.sh captures GPU/Ollama telemetry in parallel.
 
 Usage:
-  ./ollama-test-and-monitor-RTX3090.sh [options]
+  ./ollama-test-and-monitor-RTX3090.sh MODEL_PATTERN [options]
+  ./ollama-test-and-monitor-RTX3090.sh --model MODEL_PATTERN [options]
+  ./ollama-test-and-monitor-RTX3090.sh --help
+
+Short example:
+  ./ollama-test-and-monitor-RTX3090.sh qwen3.6
+
+Model selection:
+  MODEL_PATTERN is resolved against locally available Ollama model names from /api/tags.
+  Matching order is exact full name, exact base name before ':', then unique case-insensitive substring.
+  Example: qwen3.6 resolves to qwen3.6:35b when that is the only local match.
+  With no MODEL_PATTERN, or with no/ambiguous match, the script lists available models and prints this help.
+
+Defaults for RTX 3090 baseline:
+  monitor-profile=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT
+  long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK
 
 Core options:
-  --model NAME              Model to test (default: $MODEL)
+  --model PATTERN           Model name or pattern to resolve locally
   --base-url URL            Ollama base URL (default: $BASE_URL)
   --out-dir DIR             Output root (default: $OUT_DIR)
   --run-id ID               Override run id
@@ -66,6 +84,8 @@ Core options:
   --long-prompt-words N     True long-context prompt size (default: $LONG_PROMPT_WORDS)
   --concurrency N           Test concurrency probe size (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
+  --server-log-lines N      Capture last N Ollama server log lines in test artifacts (default: $SERVER_LOG_LINES)
+  --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots in test artifacts
 
 Optional probes:
   --run-conc / --no-conc    Enable/disable concurrency probe (default: $RUN_CONC)
@@ -79,7 +99,7 @@ Optional probes:
   --vram-num-predict N      VRAM-pressure generation length (default: $VRAM_NUM_PREDICT)
 
 Operational options:
-  --pull / --no-pull        Pull missing model(s) (default: $PULL_IF_MISSING)
+  --pull / --no-pull        Pull missing exact model after resolution (default: $PULL_IF_MISSING)
   --timeout-sec N           curl max time per test request (default: $TIMEOUT_SEC)
   --terminal-summary / --no-terminal-summary  Print <=50-line ASCII summary (default: $PRINT_TERMINAL_SUMMARY)
   --zip / --no-zip          Create combined ~/tmp zip archive (default: $ZIP_ON_EXIT)
@@ -92,6 +112,10 @@ warn() { printf 'WARN: %s\n' "$*" >&2; printf '%s WARN: %s\n' "$(date -Is)" "$*"
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1" >&2; exit 2; }; }
 is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 script_dir() { cd -- "$(dirname -- "$(realpath "${BASH_SOURCE[0]}")")" && pwd; }
+
+ORIGINAL_ARGC=$#
+NO_MODEL_ARGS=0
+[[ "$ORIGINAL_ARGC" -eq 0 ]] && NO_MODEL_ARGS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -108,6 +132,9 @@ while [[ $# -gt 0 ]]; do
     --long-prompt-words) LONG_PROMPT_WORDS="${2:-}"; shift 2 ;;
     --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
     --think) THINK="${2:-}"; shift 2 ;;
+    --server-log-lines) SERVER_LOG_LINES="${2:-}"; shift 2 ;;
+    --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
+    --no-wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=0; shift ;;
     --run-conc) RUN_CONC=1; shift ;;
     --no-conc) RUN_CONC=0; shift ;;
     --run-cpu) RUN_CPU=1; shift ;;
@@ -127,7 +154,10 @@ while [[ $# -gt 0 ]]; do
     --zip) ZIP_ON_EXIT=1; shift ;;
     --no-zip) ZIP_ON_EXIT=0; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    --*) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    *)
+      if [[ -z "$MODEL" ]]; then MODEL="$1"; shift; else echo "ERROR: unexpected extra positional argument: $1" >&2; usage >&2; exit 2; fi
+      ;;
   esac
 done
 
@@ -152,6 +182,7 @@ START_SCRIPT="$SD/ollama-start"
 [[ -x "$MONITOR_SCRIPT" ]] || { echo "ERROR: missing executable $MONITOR_SCRIPT" >&2; exit 2; }
 [[ -x "$TEST_SCRIPT" ]] || { echo "ERROR: missing executable $TEST_SCRIPT" >&2; exit 2; }
 need_cmd curl
+need_cmd jq
 need_cmd tee
 
 ensure_server() {
@@ -160,16 +191,99 @@ ensure_server() {
   curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" >/dev/null 2>&1 || { echo "ERROR: Ollama server is not reachable at $BASE_URL" >&2; exit 3; }
 }
 
+
+ollama_model_names() {
+  curl -fsS --connect-timeout 5 "$BASE_URL/api/tags" 2>/dev/null | jq -r '.models[]? | (.name // .model // empty)' | awk 'NF' | sort -u
+}
+
+print_available_models() {
+  local names
+  names="$(ollama_model_names || true)"
+  echo "Available local Ollama models at $BASE_URL:"
+  if [[ -n "$names" ]]; then
+    printf '%s\n' "$names" | sed 's/^/  - /'
+  else
+    echo "  (none detected, or /api/tags did not return model names)"
+  fi
+}
+
+resolve_model_pattern() {
+  local pattern="$1"
+  local names matches
+  [[ -n "$pattern" ]] || return 2
+  names="$(ollama_model_names || true)"
+  [[ -n "$names" ]] || return 4
+
+  matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
+    BEGIN{pl=tolower(p)}
+    {n=$0; nl=tolower(n); split(n,a,":"); bl=tolower(a[1]); if(n==p || nl==pl || a[1]==p || bl==pl) print n}
+  ' | sort -u)"
+  if [[ -z "$matches" ]]; then
+    matches="$(printf '%s\n' "$names" | awk -v p="$pattern" '
+      BEGIN{pl=tolower(p)}
+      {n=$0; if(index(tolower(n),pl)>0) print n}
+    ' | sort -u)"
+  fi
+
+  local count
+  count="$(printf '%s\n' "$matches" | awk 'NF{c++} END{print c+0}')"
+  if [[ "$count" == "1" ]]; then
+    printf '%s\n' "$matches" | awk 'NF{print; exit}'
+    return 0
+  fi
+  if [[ "$count" -gt 1 ]]; then
+    echo "ERROR: model pattern '$pattern' is ambiguous. Matching local models:" >&2
+    printf '%s\n' "$matches" | sed 's/^/  - /' >&2
+    return 5
+  fi
+  return 4
+}
+
+select_or_explain_model() {
+  local pattern="$1" resolved rc
+  if [[ -z "$pattern" ]]; then
+    echo "ERROR: model pattern is required." >&2
+    print_available_models >&2 || true
+    echo >&2
+    usage >&2
+    trap - EXIT INT TERM 2>/dev/null || true
+    exit 2
+  fi
+  set +e
+  resolved="$(resolve_model_pattern "$pattern")"
+  rc=$?
+  set -e
+  if [[ "$rc" == "0" && -n "$resolved" ]]; then
+    MODEL="$resolved"
+    MODEL_PATTERN="$pattern"
+    return 0
+  fi
+  if [[ "$rc" == "5" ]]; then
+    echo >&2
+    usage >&2
+    trap - EXIT INT TERM 2>/dev/null || true
+    exit 5
+  fi
+  echo "ERROR: no local Ollama model matched pattern '$pattern'." >&2
+  print_available_models >&2 || true
+  echo >&2
+  usage >&2
+  trap - EXIT INT TERM 2>/dev/null || true
+  exit 4
+}
+
 latest_file() { find "$1" -name "$2" -type f 2>/dev/null | sort | tail -1 || true; }
 
 make_terminal_summary() {
-  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report
+  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail
   test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
   conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
   soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
   monitor_csv="$(latest_file "$MONITOR_ROOT" gpu.csv)"
   test_summary="$(latest_file "$TEST_ROOT" summary.md)"
   monitor_report="$(latest_file "$MONITOR_ROOT" report.md)"
+  hint_file="$(latest_file "$TEST_ROOT" failure-hints.txt)"
+  server_log_tail="$(latest_file "$TEST_ROOT" ollama-server-log-tail.txt)"
   {
     echo "============================================================"
     echo "RTX3090 OLLAMA TEST+MONITOR SUMMARY"
@@ -185,6 +299,12 @@ make_terminal_summary() {
         END{status=(errors>0?"FAIL":((thinkonly>0||longfill<35)?"PASS_WITH_WARNINGS":"PASS")); printf "Test    : %s\n", status; if(warmn>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Warm    : no valid warm single GPU rows"; printf "Cold    : first-load %.2fs\n", cold; printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", longpe, longctx, longfill, longgen, (longfill>=35?"OK":"UNDERFILLED"); printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, thinkonly, errors}' "$test_csv"
     else
       echo "Perf    : test CSV not found"
+    fi
+    if [[ -n "$hint_file" && -f "$hint_file" ]]; then
+      awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$hint_file" | head -5
+    fi
+    if [[ "$TEST_RC" -ne 0 ]]; then
+      echo "Verdict : inference-health INCONCLUSIVE; monitor telemetry is not a completed-model-load benchmark"
     fi
     if [[ -n "$conc_csv" && -f "$conc_csv" ]]; then
       awk -F',' 'function unq(s){gsub(/^"|"$/, "", s); return s} NR==2{printf "Conc    : x%s aggregate %.2f tok/s over %.2fs; ok=%s err=%s\n", unq($2), unq($6)+0, unq($3)+0, unq($7), unq($8)}' "$conc_csv"
@@ -209,7 +329,7 @@ make_terminal_summary() {
       awk -F',' '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-        NR<=11{test=unq($(h["test"])); cat=unq($(h["category"])); ctx=unq($(h["num_ctx"])); prompt=unq($(h["prompt_eval_tokens"])); gen=unq($(h["gen_tps"])); done=unq($(h["done_reason"])); if(gen!="")gen=sprintf("%.2f",gen); printf "  %-18s %-10s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, ctx, prompt, gen, done}
+        NR<=11{test=unq($(h["test"])); cat=unq($(h["category"])); ctx=unq($(h["num_ctx"])); prompt=unq($(h["prompt_eval_tokens"])); gen=unq($(h["gen_tps"])); done=unq($(h["done_reason"])); http=unq($(h["http_code"])); cls=unq($(h["error_class"])); if(gen!="")gen=sprintf("%.2f",gen); suffix=(cls!=""?"http="http" "cls:done); printf "  %-18s %-10s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, ctx, prompt, gen, suffix}
         NR==12{print "  ... additional rows omitted; see summary.csv"}' "$test_csv"
     fi
     echo "Files:"
@@ -217,26 +337,31 @@ make_terminal_summary() {
     echo "  zip : ${ARCHIVE_PATH:-not-created}"
     echo "  md  : $SUMMARY_MD"
     echo "  test: ${test_summary:-not-found}"
+    echo "  hint: ${hint_file:-not-found}"
+    echo "  log : ${server_log_tail:-not-found}"
     echo "  mon : ${monitor_report:-not-found}"
     echo "============================================================"
   } >"$TERMINAL_SUMMARY"
 }
 
 make_summary() {
-  local test_summary monitor_report test_csv monitor_csv conc_csv soak_csv
+  local test_summary monitor_report test_csv monitor_csv conc_csv soak_csv hint_file server_log_tail
   test_summary="$(latest_file "$TEST_ROOT" summary.md)"
   monitor_report="$(latest_file "$MONITOR_ROOT" report.md)"
   test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
   monitor_csv="$(latest_file "$MONITOR_ROOT" gpu.csv)"
   conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
   soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
+  hint_file="$(latest_file "$TEST_ROOT" failure-hints.txt)"
+  server_log_tail="$(latest_file "$TEST_ROOT" ollama-server-log-tail.txt)"
   {
     echo "# RTX 3090 Ollama Test + Monitor Orchestrator Summary"; echo
     echo "## Run metadata"
     echo "- script_version: $VERSION"
     echo "- signature: $SCRIPT_SIGNATURE"
     echo "- run_id: $RUN_ID"
-    echo "- model: $MODEL"
+    echo "- requested_model: ${MODEL_PATTERN:-$MODEL}"
+    echo "- resolved_model: $MODEL"
     echo "- base_url: $BASE_URL"
     echo "- think: $THINK"
     echo "- run_dir: $RUN_DIR"
@@ -245,6 +370,8 @@ make_summary() {
     echo "## Compact terminal summary"; echo '```text'; if [[ -s "$TERMINAL_SUMMARY" ]]; then cat "$TERMINAL_SUMMARY"; else echo "terminal summary not generated"; fi; echo '```'; echo
     echo "## Detailed component files"
     echo "- test summary: ${test_summary:-not found}"
+    echo "- failure hints: ${hint_file:-not found}"
+    echo "- Ollama server log tail: ${server_log_tail:-not found}"
     echo "- test CSV: ${test_csv:-not found}"
     echo "- concurrency aggregate CSV: ${conc_csv:-not found}"
     echo "- soak aggregate CSV: ${soak_csv:-not found}"
@@ -289,11 +416,19 @@ trap 'TEST_RC=143; cleanup; exit 143' TERM
 trap 'rc=$?; if [[ $rc -ne 0 ]]; then TEST_RC=$rc; fi; cleanup' EXIT
 
 ensure_server
+if [[ "$NO_MODEL_ARGS" == "1" ]]; then
+  trap - EXIT INT TERM 2>/dev/null || true
+  print_available_models
+  echo
+  usage
+  exit 2
+fi
+select_or_explain_model "$MODEL"
 
 log "ollama-test-and-monitor-RTX3090.sh v$VERSION"
 log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
-log "Plan: model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
+log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 log "Monitor: interval=${INTERVAL}s profile=$MONITOR_PROFILE"
 log "Starting monitor..."
 
@@ -307,9 +442,10 @@ TEST_ARGS=(
   --num-ctx "$NUM_CTX" --long-ctx "$LONG_CTX" --num-predict "$NUM_PREDICT" --long-num-predict "$LONG_NUM_PREDICT" --long-prompt-words "$LONG_PROMPT_WORDS"
   --concurrency "$CONCURRENCY" --timeout-sec "$TIMEOUT_SEC" --think "$THINK" --soak-minutes "$SOAK_MINUTES" --soak-num-predict "$SOAK_NUM_PREDICT"
   --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT"
-  --no-terminal-summary --no-zip --no-ensure-server
+  --no-terminal-summary --no-zip --no-ensure-server --server-log-lines "$SERVER_LOG_LINES"
 )
 [[ -n "$VRAM_MODEL" ]] && TEST_ARGS+=(--vram-model "$VRAM_MODEL")
+[[ "$CAPTURE_WSL_DIAGNOSTICS" == "1" ]] || TEST_ARGS+=(--no-wsl-diagnostics)
 [[ "$RUN_CONC" == "1" ]] && TEST_ARGS+=(--run-conc) || TEST_ARGS+=(--no-conc)
 [[ "$RUN_CPU" == "1" ]] && TEST_ARGS+=(--run-cpu) || TEST_ARGS+=(--no-cpu)
 [[ "$RUN_VRAM_PRESSURE" == "1" ]] && TEST_ARGS+=(--run-vram-pressure) || TEST_ARGS+=(--no-vram-pressure)

@@ -1,4 +1,4 @@
-# ollama-info v0.8
+# ollama-info v1.0
 
 WSL2 + Ollama + NVIDIA RTX 3090 health, performance, and resumable GGUF download toolkit.
 
@@ -12,7 +12,8 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 
 ## Contents
 
-- [What changed in v0.8](#what-changed-in-v08)
+- [What changed in v1.0](#what-changed-in-v10)
+- [RTX 3090 + WSL2 setup recommendations](#rtx-3090--wsl2-setup-recommendations)
 - [What this package can and cannot prove](#what-this-package-can-and-cannot-prove)
 - [Requirements](#requirements)
 - [Install](#install)
@@ -27,20 +28,83 @@ start monitor -> run Ollama RTX3090 tests -> stop monitor -> summarize -> zip on
 - [Safety](#safety)
 - [Validation and development notes](#validation-and-development-notes)
 
-## What changed in v0.8
+## What changed in v1.0
 
-v0.8 adds a production-oriented WSL2 model acquisition path for large GGUF files on unstable connections:
+v1.0 makes the RTX 3090 test runner usable as a short daily command and adds a reviewed WSL2 Bash startup profile.
 
-- Added `ollama-download.sh`: resumable GGUF download utility with `hf`, `aria2`, and `curl` methods.
-- Added automatic retry loops around failed transfer attempts; `--max-tries 0` means retry until success or user interruption.
-- Added explicit aria2 resume support using `--continue=true` and persistent `.aria2` state.
-- Added direct Hugging Face repo/file support: `--repo`, `--file`, and `--revision`.
-- Added private/gated Hugging Face support through `hf auth login`, `HF_TOKEN`, or `HUGGING_FACE_HUB_TOKEN`; token headers are written to temporary config/input files instead of process argv.
-- Added local GGUF verification: non-empty file check, GGUF magic-byte warning, optional `--sha256`, and computed SHA256 logging.
-- Added Ollama import path: generated `Modelfile` with `FROM /absolute/path/model.gguf`, optional `--param KEY=VALUE`, and `ollama create`.
-- Added downloader run logs under `~/log/ollama-download/run-*`.
+New in v1.0:
 
-The v0.7 RTX3090 diagnostics remain unchanged: true long-context testing, categorized performance summaries, concurrency aggregate metrics, deeper monitor evidence, optional soak, and optional VRAM-pressure probes.
+- `ollama-test-and-monitor-RTX3090.sh qwen3.6` now resolves `qwen3.6` against locally available Ollama model names, for example `qwen3.6:35b`.
+- The same model-pattern selector was added to `ollama-test-RTX3090.sh` for direct test runs.
+- With no model argument, the scripts list available local models and print the help screen instead of silently using an old default model.
+- If a pattern is missing or ambiguous, the scripts show the matching/available models and stop before launching the monitor or test workload.
+- The default RTX 3090 baseline remains: deep monitor profile, 1 second interval, 4096 standard context, 8192 long context, 512 standard generation tokens, 1024 sustained generation tokens, 3200-word long prompt, concurrency probe enabled at 2, CPU probe disabled, VRAM-pressure probe disabled, and `think=false`.
+- Added `bashrc/.bashrc`, a reviewed candidate profile for WSL2 where Ollama is managed by systemd.
+- Added `bashrc/README.md` with the review of the uploaded `.bashrc` and install instructions.
+- Updated `ollama-start`, `ollama-stop`, and `ollama-status` to prefer systemd-managed `ollama.service` when available, with nohup/pkill fallback only when systemd service is absent.
+
+### New short command
+
+```bash
+ollama-test-and-monitor-RTX3090.sh qwen3.6
+```
+
+Resolution rules:
+
+1. Exact full local model name, such as `qwen3.6:35b`.
+2. Exact base name before `:`, such as `qwen3.6` matching `qwen3.6:35b`.
+3. Unique case-insensitive substring match.
+4. If no match or multiple matches exist, list models and print help.
+
+Examples:
+
+```bash
+# Recommended baseline after a large model pull/rebuild
+ollama-test-and-monitor-RTX3090.sh qwen3.6
+
+# Conservative diagnostic run without concurrency
+ollama-test-and-monitor-RTX3090.sh qwen3.6 --no-conc
+
+# Explicit exact model still works
+ollama-test-and-monitor-RTX3090.sh --model qwen3.6:35b --long-ctx 8192
+```
+
+### Systemd-managed Ollama helpers
+
+For your intended setup, Ollama should be configured in `ollama.service`, not tuned through `~/.bashrc`. v1.0 updates the helpers accordingly:
+
+```bash
+ollama-start   # prefers systemctl start ollama
+ollama-status  # shows systemd status, API status, models, disk usage, GPU status
+ollama-stop    # prefers systemctl stop ollama; set KILL_ONLY=1 for direct pkill fallback
+```
+
+The packaged Bash profile exposes `ollama_test qwen3.6` / alias `ot qwen3.6` for the short benchmark command.
+
+## What changed in v0.9
+
+v0.9 is a failure-aware RTX 3090/Ollama test release. It was driven by a real failed run where every `/api/generate` request returned HTTP 500 and the terminal summary hid the useful API error body.
+
+New in v0.9:
+
+- Upgraded `ollama-test-RTX3090.sh`, `ollama-monitor.sh`, and `ollama-test-and-monitor-RTX3090.sh` to v0.9 signatures.
+- Preserved HTTP status and Ollama API error bodies instead of reducing HTTP 500 to `curl_failed_rc_22`.
+- Added `http_code`, `error_class`, and `error_body` columns to `summary.csv`.
+- Added `failure-hints.txt`, including referenced model blob path, likely cause, next action, model size GiB, and pre-run free VRAM when available.
+- Added preflight evidence: `/api/version`, `/api/tags`, `/api/show`, `ollama show`, `ollama list`, WSL diagnostics, and Ollama server log tail.
+- Added `--server-log-lines`, `--wsl-diagnostics`, and `--no-wsl-diagnostics` options.
+- Made terminal summaries explicitly mark inference health as `INCONCLUSIVE` when no valid tokens were produced.
+- Made `ollama-monitor.sh` report whether a loaded Ollama model was actually observed; monitor-only `Health: PASS` is no longer easy to misread as a completed inference benchmark.
+- Kept the v0.8 resumable GGUF download/import path unchanged.
+
+Historical v0.8 additions retained in this package:
+
+- `ollama-download.sh`: resumable GGUF download utility with `hf`, `aria2`, and `curl` methods.
+- Automatic retry loops around failed transfer attempts; `--max-tries 0` means retry until success or user interruption.
+- Explicit aria2 resume support using `--continue=true` and persistent `.aria2` state.
+- Direct Hugging Face repo/file support: `--repo`, `--file`, and `--revision`.
+- Private/gated Hugging Face support through `hf auth login`, `HF_TOKEN`, or `HUGGING_FACE_HUB_TOKEN`.
+- Local GGUF verification, optional `--sha256`, generated `Modelfile`, and `ollama create` import.
 
 ## What this package can and cannot prove
 
@@ -94,6 +158,79 @@ nvidia-smi
 ```
 
 On WSL2, `nvidia-smi` is exposed by the Windows NVIDIA driver. The scripts do not install or modify GPU drivers.
+
+
+## RTX 3090 + WSL2 setup recommendations
+
+For reproducible 24 GB RTX 3090 benchmarking, keep the software path simple and avoid changing multiple variables at once.
+
+### Windows / NVIDIA / WSL
+
+- Install the current Windows NVIDIA production driver. Do not install a Linux display driver inside WSL.
+- Update WSL from Windows PowerShell:
+
+```powershell
+wsl.exe --update
+wsl.exe --shutdown
+```
+
+- Put distro-specific settings in `/etc/wsl.conf`:
+
+```ini
+[boot]
+systemd=true
+
+[gpu]
+enabled=true
+```
+
+- Put VM-wide WSL2 settings in `%UserProfile%\.wslconfig`. Example starting point for a 64 GB RAM workstation:
+
+```ini
+[wsl2]
+memory=48GB
+processors=10
+swap=32GB
+localhostForwarding=true
+# For headless benchmarking only; leave enabled if you need Linux GUI apps.
+guiApplications=false
+
+[experimental]
+autoMemoryReclaim=gradual
+sparseVhd=true
+```
+
+Apply `.wslconfig` changes with:
+
+```powershell
+wsl.exe --shutdown
+```
+
+Do not blindly copy the memory/CPU numbers. Leave enough RAM and CPU capacity for Windows, browser sessions, and the NVIDIA driver stack.
+
+### Ollama service settings for edge-of-VRAM models
+
+For a large Q4 35B/36B model on a 24 GB RTX 3090, start with conservative concurrency. Use `systemctl edit ollama.service` on Linux/WSL systemd installs:
+
+```ini
+[Service]
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_KEEP_ALIVE=30m"
+# Test these one at a time; keep notes on speed and memory behavior.
+Environment="OLLAMA_FLASH_ATTENTION=1"
+# Optional memory-saving KV cache experiment.
+# Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+```
+
+Apply changes:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+Then validate one request at a time before testing concurrency 2. A 35B Q4 model, 8K context, and two parallel requests can be close to the practical VRAM limit once KV cache and runtime overhead are included.
 
 ## Install
 
@@ -268,7 +405,7 @@ Primary command. It runs the monitor and test script together.
 Common options:
 
 ```text
---model NAME              Ollama model, default qwen3:8b
+--model NAME              Ollama model pattern; required unless passed positionally
 --think false             Disable thinking output for Qwen3-style models
 --interval 1              Monitor sample interval in seconds
 --monitor-profile deep    Richest GPU telemetry profile
@@ -292,23 +429,23 @@ Common options:
 Runs only the Ollama API tests. It does not run the parallel GPU monitor.
 
 ```bash
-ollama-test-RTX3090.sh --model qwen3:8b --think false
+ollama-test-RTX3090.sh qwen3 --think false
 ```
 
 Useful variants:
 
 ```bash
 # True long-context probe with larger prompt
-ollama-test-RTX3090.sh --model qwen3:8b --long-ctx 8192 --long-prompt-words 5000
+ollama-test-RTX3090.sh qwen3 --long-ctx 8192 --long-prompt-words 5000
 
 # Add a 15-minute thermal/performance soak
-ollama-test-RTX3090.sh --model qwen3:8b --soak-minutes 15
+ollama-test-RTX3090.sh qwen3 --soak-minutes 15
 
 # Add CPU reference; slow and may force reloads
-ollama-test-RTX3090.sh --model qwen3:8b --run-cpu
+ollama-test-RTX3090.sh qwen3 --run-cpu
 
 # Optional larger-model VRAM pressure; model must already exist unless --pull is used
-ollama-test-RTX3090.sh --model qwen3:8b --run-vram-pressure --vram-model qwen3:30b --vram-ctx 8192
+ollama-test-RTX3090.sh qwen3 --run-vram-pressure --vram-model qwen3:30b --vram-ctx 8192
 ```
 
 ### `ollama-monitor.sh`
@@ -370,6 +507,13 @@ Combined orchestrator run:
     nvidia-smi-q-before.txt
     nvidia-smi-q-after.txt
     dmesg-gpu-errors.txt
+    failure-hints.txt
+    ollama-server-log-tail.txt
+    wsl-diagnostics.txt
+    ollama-api-version.json
+    ollama-api-tags.json
+    ollama-api-show-model.json
+    ollama-show-model.txt
   monitor/run-<id>-monitor/
     terminal-summary.txt
     report.md
@@ -412,12 +556,13 @@ Archive:
 | `LongCtx` | Long-context prompt-evaluation/generation behavior. Check `prompt_tokens` and `fill`; a low fill means the prompt did not really stress the context window. |
 | `Conc` | Aggregate concurrency throughput across parallel requests. This is separate from per-request token/sec. |
 | `Soak` | Optional aggregate throughput over repeated requests for thermal/performance stability. |
+| `Error`, `http_code`, `error_class`, `error_body` | v0.9 failure-classification columns. Use these first when a run fails before token generation. |
 
 ### Health metrics
 
 | Metric | Meaning |
 |---|---|
-| `Health: PASS` | No critical thermal/throttle/VRAM/PCIe check condition detected by available telemetry. |
+| `Health: PASS` | No critical thermal/throttle/VRAM/PCIe check condition detected by available telemetry. If no model-load snapshot or generated tokens exist, treat this as monitor-health only, not inference-health. |
 | `Health: PASS_WITH_CHECKS` | Test succeeded but one or more check conditions were observed, such as PCIe width below max while busy. |
 | `Health: FAIL` | Critical temperature or hardware slowdown throttle was detected, or the test process failed. |
 | `Thermal` | Max GPU core temperature and power draw during monitoring. |
@@ -438,6 +583,48 @@ The default is:
 Raw JSON still preserves `thinking`, `response`, durations, token counts, and `done_reason` for audit.
 
 ## Troubleshooting findings
+
+### HTTP 500: `unable to load model: .../blobs/sha256-*`
+
+This is a model-load failure, not an RTX 3090 performance result. v0.9 classifies it as `model_load_error` and writes the full API body to `summary.csv` and `failure-hints.txt`.
+
+Immediate checks:
+
+```bash
+# Check for model-store activity that should not overlap with benchmarks.
+pgrep -af 'ollama pull|ollama serve|ollama runner'
+
+# Stop the target model if partially loaded.
+ollama stop qwen3.6:35b 2>/dev/null || true
+
+# Inspect the referenced blob from failure-hints.txt.
+stat '/home/alex/.ollama/models/blobs/sha256-...'
+sha256sum '/home/alex/.ollama/models/blobs/sha256-...'
+
+# Capture current model metadata.
+ollama show qwen3.6:35b
+ollama ps
+```
+
+Likely fixes:
+
+```bash
+# If the model came from Ollama registry and the blob is missing/corrupt:
+ollama rm qwen3.6:35b
+ollama pull qwen3.6:35b
+
+# If the model came from a local GGUF import:
+# Recreate the model from the known-good GGUF/Modelfile.
+ollama create qwen3.6:35b -f Modelfile
+```
+
+Rerun a conservative baseline before concurrency:
+
+```bash
+ollama-test-and-monitor-RTX3090.sh qwen3.6 --no-conc --concurrency 1
+```
+
+Only after that produces valid tokens should you rerun with `--concurrency 2`.
 
 ### PCIe width x8 / max x16
 
@@ -488,6 +675,9 @@ Keep the generated zip and these files:
 | `gpu.csv` | Yes | Independent GPU telemetry source. |
 | `nvidia-smi-q-*.txt` | Yes | Deeper NVIDIA state snapshot. |
 | `dmesg-gpu-errors.txt` | Yes | Linux/WSL-visible GPU error scan. |
+| `failure-hints.txt` | Yes | First-pass failure classification and next-action hints. |
+| `ollama-server-log-tail.txt` | Yes | Server-side context around model-load/API failures. |
+| `wsl-diagnostics.txt` | Yes | WSL and `.wslconfig` evidence for environment reviews. |
 
 Do not keep only screenshots. They are insufficient for later troubleshooting.
 
@@ -525,19 +715,19 @@ CPU tests are off by default because they can be slow and may force model reload
 
 ## Validation and development notes
 
-v0.8 validation performed during packaging:
+v0.9 validation performed during packaging:
 
 ```text
 bash -n for all Bash scripts
---help check for ollama-download.sh
-ollama-download.sh --dry-run path check
-ollama-download.sh --local-file --no-create self-test with synthetic GGUF header
-ollama-download.sh --local-file --name with fake ollama create/show
+ollama-monitor.sh --self-test --no-zip
+fake Ollama HTTP 500 model-load server test for ollama-test-RTX3090.sh
+summary.csv includes http_code/error_class/error_body
+failure-hints.txt captures model_load_error and referenced sha256 blob path
 manifest regenerated with SHA256 checksums
 unzip final package and repeat basic validation
 ```
 
-The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.8 validation details are in `VERIFY-v0.8.md`; final requirement status is in `REFLECTION-v0.8.md`.
+The package is intended to be inspected and modified. The implementation plan for v0.7 is in `plan.txt`; v0.9 validation details are in `VERIFY-v0.9.md`; v1.0 validation details are in `VERIFY-v1.0.md`; final v1.0 requirement status is in `REFLECTION-v1.0.md`.
 
 ## Changelog summary
 
