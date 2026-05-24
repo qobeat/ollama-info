@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.5.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.5.0-rtx3090-zip-report"
+VERSION="0.6.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v0.6.0-rtx3090-zip-terminal-summary"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -27,6 +27,7 @@ BUSY_LOW_CLOCK_MHZ="${BUSY_LOW_CLOCK_MHZ:-1000}"
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 CSV="$RUN_DIR/gpu.csv"
 REPORT="$RUN_DIR/report.md"
+TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 META="$RUN_DIR/meta.txt"
 OLLAMA_PS_FILE="$RUN_DIR/ollama-ps.txt"
 OLLAMA_API_PS_FILE="$RUN_DIR/ollama-api-ps.jsonl"
@@ -110,6 +111,7 @@ esac
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 CSV="$RUN_DIR/gpu.csv"
 REPORT="$RUN_DIR/report.md"
+TERMINAL_SUMMARY="$RUN_DIR/terminal-summary.txt"
 META="$RUN_DIR/meta.txt"
 OLLAMA_PS_FILE="$RUN_DIR/ollama-ps.txt"
 OLLAMA_API_PS_FILE="$RUN_DIR/ollama-api-ps.jsonl"
@@ -437,6 +439,31 @@ generate_report() {
   } >"$REPORT"
 }
 
+
+make_terminal_summary() {
+  {
+    echo "============================================================"
+    echo "RTX3090 OLLAMA MONITOR SUMMARY"
+    echo "Run ID  : $RUN_ID"
+    echo "Reason  : $STOP_REASON"
+    if [[ -s "$CSV" ]]; then
+      awk -F',' '
+        function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
+        NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
+        {n++; name=trim($(h["name"])); util=trim($(h["gpu_util_pct"]))+0; temp=trim($(h["temp_c"]))+0; power=trim($(h["power_w"]))+0; vram=trim($(h["vram_used_mib"]))+0; total=trim($(h["vram_total_mib"]))+0; pg=trim($(h["pcie_gen_current"])); pw=trim($(h["pcie_width_current"])); pmw=trim($(h["pcie_width_max"])); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw}
+        END{pct=(last_total?100*max_vram/last_total:0); printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW\n", max_temp, max_power; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%)\n", max_vram, last_total, pct; printf "PCIe    : gen %s; width x%s / max x%s\n", last_pg, last_pw, last_pmw}' "$CSV"
+    else
+      echo "GPU     : no CSV samples"
+    fi
+    echo "Files:"
+    echo "  run : $RUN_DIR"
+    echo "  md  : $REPORT"
+    echo "  csv : $CSV"
+    if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
+    echo "============================================================"
+  } >"$TERMINAL_SUMMARY"
+}
+
 finish() {
   [[ "$FINALIZED" == "1" ]] && return 0
   FINALIZED=1
@@ -447,7 +474,9 @@ finish() {
     printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"
   fi
   generate_report || warn "report generation failed"
+  make_terminal_summary || warn "terminal summary generation failed"
   make_archive || warn "archive creation failed"
+  if [[ -s "$TERMINAL_SUMMARY" ]]; then cat "$TERMINAL_SUMMARY"; fi
   log "Report: $REPORT"
   log "CSV:    $CSV"
   if [[ -n "${ARCHIVE_PATH:-}" ]]; then log "ZIP:    $ARCHIVE_PATH"; fi

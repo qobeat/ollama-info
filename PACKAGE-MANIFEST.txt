@@ -1,37 +1,23 @@
-ollama-info v0.5 package manifest
-created_utc=2026-05-23T23:16:46Z
+# PACKAGE-MANIFEST ollama-info v0.6
 
-files:
-CHANGELOG.md
-PACKAGE-MANIFEST.txt
-README.md
-REFLECTION-v0.5.md
-REVIEW-v0.5.md
-calc_perf_ollama.py
-calc_perf_ollama_table.py
-ollama-gen
-ollama-monitor.sh
-ollama-perf
-ollama-perf-table
-ollama-start
-ollama-status
-ollama-stop
-ollama-test-RTX3090.sh
-ollama-test-and-monitor-RTX3090.sh
+Generated: 2026-05-23T23:38:51+00:00
 
-sha256_excluding_PACKAGE-MANIFEST.txt:
-5d4b3d9929da6b28c37a39a259f2a27d790d2eb6c8be118ec87c6d6ff65a2ef5  CHANGELOG.md
-35fb6637bd311d993774ddc5d8b62f7f870dc08657fdda5b2792cae1c8a33d17  README.md
-450bc87b83f516a1d02d0508d072dc230b744bd68e495b22367934c7d4945adb  REFLECTION-v0.5.md
-2a4d4ddc3129ec1fe368173a9b15abd3e55f4a8d9af920064d5c38ece4491f5d  REVIEW-v0.5.md
-8a18e6c6597fc741c9a65b5d17fa56fef37ddbe853beb71b4ac9ac534e5f2be2  calc_perf_ollama.py
-25a8217c40c59d46ebeb7c7bd5740078c86429ab4b7fec11683e29bd947fd4bc  calc_perf_ollama_table.py
-366358864c490b26d1e990b3db2aa38bb6659d2bf147d188df26b806f230e7a7  ollama-gen
-fd57bb4407fad3489a4dd04979686e3001a3b3a5992d315bcdcfe0fa9d0715f8  ollama-monitor.sh
-19780f3d91cdbbd05bdf919b0c825aebea56bac4815d1f7b4df76ad4f992b841  ollama-perf
-09171924ec84f1220e023b8ea7dceae585650ffe9c0a89bcf7e77bda8f943067  ollama-perf-table
-cc7f740e2f602d29c959ed5bd1671465675973f62c428798b8f1395b7c22a4ac  ollama-start
-5163e997d2c09c08222b5553024816151c9e9c162b5c85fb579babcd00ba9bf9  ollama-status
-cdf41a7b7b5212ae633fdca2ab2c08f7ed6dc3bde23a704d1e30fbbbf19dc007  ollama-stop
-ff6b2a466e9fa65f42fab26bb2747362dbaaa84411d46fcbbe530167451ca4bf  ollama-test-RTX3090.sh
-08e93f7c0c5f720a5cf1795ab8a554ceda2069463b7447228ef4a7b48616cddd  ollama-test-and-monitor-RTX3090.sh
+## Files
+CHANGELOG.md                                      843 bytes  55c9bb06ee8cb8dc315f67d94e3e872b3237dc9d4641df9d2342d9a86934bd4d
+PACKAGE-MANIFEST.txt                              210 bytes  1acf3efd9e809a9a3a814bac0d52a5bbcda8e1f5265ef5f94297e53a1ddf882f
+README.md                                        8509 bytes  d924d5f79035d5dd79655f6e7e3557caaf7cac8bc08eda8b7db96cd10eb17a67
+REFLECTION-v0.5.md                               4337 bytes  450bc87b83f516a1d02d0508d072dc230b744bd68e495b22367934c7d4945adb
+REFLECTION-v0.6.md                               1307 bytes  254eb58097074d0e51e710b3f6a00ea517f6170fed4860330b8a3d7e8f0be36e
+REVIEW-v0.5.md                                   2875 bytes  2a4d4ddc3129ec1fe368173a9b15abd3e55f4a8d9af920064d5c38ece4491f5d
+REVIEW-v0.6.md                                   1414 bytes  1fd990a86dfcc9cb55d32eb0b107662ee30302e39647a5be6b6bd0bf8e2d3ef7
+calc_perf_ollama.py                              2074 bytes  8a18e6c6597fc741c9a65b5d17fa56fef37ddbe853beb71b4ac9ac534e5f2be2
+calc_perf_ollama_table.py                        4941 bytes  25a8217c40c59d46ebeb7c7bd5740078c86429ab4b7fec11683e29bd947fd4bc
+ollama-gen                                       4624 bytes  366358864c490b26d1e990b3db2aa38bb6659d2bf147d188df26b806f230e7a7
+ollama-monitor.sh                               26197 bytes  a5fcfa27b0d28db076f8dbc2dd17da7aa7bdc5b8b8a5c9d0bcbeff0cbfbef942
+ollama-perf                                     13936 bytes  19780f3d91cdbbd05bdf919b0c825aebea56bac4815d1f7b4df76ad4f992b841
+ollama-perf-table                               12814 bytes  09171924ec84f1220e023b8ea7dceae585650ffe9c0a89bcf7e77bda8f943067
+ollama-start                                     1162 bytes  cc7f740e2f602d29c959ed5bd1671465675973f62c428798b8f1395b7c22a4ac
+ollama-status                                    2434 bytes  5163e997d2c09c08222b5553024816151c9e9c162b5c85fb579babcd00ba9bf9
+ollama-stop                                       319 bytes  cdf41a7b7b5212ae633fdca2ab2c08f7ed6dc3bde23a704d1e30fbbbf19dc007
+ollama-test-RTX3090.sh                          21060 bytes  13457b4d00cf1329b8df3d33ae1f46b10c5ca00f4d95b09b37d0d2f1773bd7b5
+ollama-test-and-monitor-RTX3090.sh              14723 bytes  d031d3434c796920d41f6e1ef3739c52448385e1aedf5da03b64df942d3e6de5

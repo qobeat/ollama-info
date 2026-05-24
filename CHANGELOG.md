@@ -1,11 +1,16 @@
 # CHANGELOG
 
-## v0.5 - 2026-05-23
+## v0.6.0 - 2026-05-23
 
-- Rebuilt `ollama-monitor.sh` with richer RTX/Ollama telemetry and automatic zip archive generation.
-- Added `ollama-test-RTX3090.sh` for model sanity, throughput, sustained generation, long-context, concurrency, and optional CPU-reference tests.
-- Added `ollama-test-and-monitor-RTX3090.sh` orchestrator to run tests while collecting telemetry.
-- Made `ollama-gen` self-contained.
-- Fixed `ollama-start` to call package-local `ollama-status`.
-- Expanded `ollama-status` GPU/model diagnostics.
-- Added `REVIEW-v0.5.md` and `REFLECTION-v0.5.md`.
+- Added compact ASCII terminal summaries for monitor, test, and orchestrated runs.
+- Made orchestrator stream test progress to terminal via `tee` while preserving `test.console.log`.
+- Added top-level Ollama `think` request control with default `false`; this addresses Qwen3 thinking-token runs that produced empty `response` fields.
+- Reduced `orchestrator-summary.md` duplication; it now references nested detailed files instead of embedding all content.
+- Added terminal summary artifacts to archives.
+- Updated README retention guidance explaining why summary.md/report.md, CSV, raw JSON, payload JSON, and gpu.csv should all be kept.
+
+## v0.5.0 - 2026-05-23
+
+- Added RTX3090 monitor/test/orchestrator scripts.
+- Added automatic zip creation under `~/tmp`.
+- Added richer GPU/Ollama telemetry capture.
