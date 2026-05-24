@@ -72,6 +72,37 @@ ollama_curl_generate() {
   fi
 }
 
+ollama_curl_generate_stream() {
+  local timeout_sec="$1" connect_timeout_sec="$2" payload_file="$3" jsonl_file="$4" http_file="$5" stderr_file="$6" timing_file="$7" base_url="$8"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 10s "$timeout_sec" curl -sS --no-buffer --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/x-ndjson' -d "@$payload_file" --write-out '\n__OLLAMA_HTTP_CODE__:%{http_code}\n' "$base_url/api/generate" 2>"$stderr_file" \
+      | awk -v jsonl="$jsonl_file" -v http="$http_file" -v timing="$timing_file" '
+          function now_ns(  cmd, out) { cmd="date +%s%N"; cmd | getline out; close(cmd); return out }
+          BEGIN { start=now_ns(); print "request_start_ns=" start > timing }
+          /^__OLLAMA_HTTP_CODE__:/ { sub(/^__OLLAMA_HTTP_CODE__:/,""); print $0 > http; next }
+          NF {
+            t=now_ns()
+            print $0 >> jsonl
+            print t "\t" $0 >> timing
+          }
+          END { end=now_ns(); print "request_end_ns=" end >> timing }
+        '
+  else
+    curl -sS --no-buffer --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/x-ndjson' -d "@$payload_file" --write-out '\n__OLLAMA_HTTP_CODE__:%{http_code}\n' "$base_url/api/generate" 2>"$stderr_file" \
+      | awk -v jsonl="$jsonl_file" -v http="$http_file" -v timing="$timing_file" '
+          function now_ns(  cmd, out) { cmd="date +%s%N"; cmd | getline out; close(cmd); return out }
+          BEGIN { start=now_ns(); print "request_start_ns=" start > timing }
+          /^__OLLAMA_HTTP_CODE__:/ { sub(/^__OLLAMA_HTTP_CODE__:/,""); print $0 > http; next }
+          NF {
+            t=now_ns()
+            print $0 >> jsonl
+            print t "\t" $0 >> timing
+          }
+          END { end=now_ns(); print "request_end_ns=" end >> timing }
+        '
+  fi
+}
+
 
 ollama_curl_embed() {
   local timeout_sec="$1" connect_timeout_sec="$2" payload_file="$3" raw_file="$4" http_file="$5" stderr_file="$6" base_url="$7"
@@ -119,15 +150,22 @@ ollama_model_role_common() {
 
 ollama_model_show_slim() {
   local model="${1:-}"
-  jq --arg model "$model" '{
+  jq --arg model "$model" '
+    def arch: (.model_info["general.architecture"] // null);
+    def first_key($suffix): first(.model_info | to_entries[]? | select(.key | endswith($suffix)) | .value);
+  {
     model: (.model // $model),
     capabilities: (.capabilities // []),
     details: (.details // {}),
-    architecture: (.model_info["general.architecture"] // null),
-    context_length: (.model_info["llama.context_length"] // .model_info["bert.context_length"] // .model_info["gemma3.context_length"] // .model_info["qwen2.context_length"] // .model_info["mpt.context_length"] // null),
-    embedding_length: (.model_info["bert.embedding_length"] // .model_info["llama.embedding_length"] // .model_info["general.embedding_length"] // null),
+    family: (.details.family // .details.families[0]? // null),
+    architecture: arch,
+    context_length: ((if arch then .model_info[(arch + ".context_length")] else null end) // first_key(".context_length") // null),
+    embedding_length: ((if arch then .model_info[(arch + ".embedding_length")] else null end) // first_key(".embedding_length") // .model_info["general.embedding_length"] // null),
     parameter_count: (.model_info["general.parameter_count"] // null),
-    quantization_version: (.model_info["general.quantization_version"] // null)
+    parameter_size: (.details.parameter_size // null),
+    quantization_level: (.details.quantization_level // null),
+    quantization_version: (.model_info["general.quantization_version"] // null),
+    model_size_on_disk: (.size // null)
   }' 2>/dev/null
 }
 
@@ -298,6 +336,7 @@ ollama_command_for_model() {
   local script_cmd="${1:-ollama-test-and-monitor-RTX3090.sh}" model="${2:-}" role="${3:-generate}" cmd
   if [[ "$role" == "embedding" ]]; then
     case "$script_cmd" in
+      "ollama bench"|ollama\ bench) cmd="ollama bench"; printf '%s %q\n' "$cmd" "$model"; return 0 ;;
       "ollama test"|ollama\ test) cmd="ollama embed-test" ;;
       *ollama-test-and-monitor-RTX3090.sh*) cmd="$script_cmd"; printf '%s %q --embedding
 ' "$cmd" "$model"; return 0 ;;

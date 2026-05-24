@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.6.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.6.0-capability-aware-embed-mode"
+VERSION="1.7.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-aware-latency-workloads"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -42,6 +42,7 @@ SERVER_LOG_LINES="${SERVER_LOG_LINES:-240}"
 CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 EMBEDDING_MODE="${EMBEDDING_MODE:-0}"
 FULL_MODEL_SHOW="${FULL_MODEL_SHOW:-0}"
+COLD_MODE="${COLD_MODE:-observed}"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
@@ -117,6 +118,7 @@ Optional probes:
 Operational options:
   --pull / --no-pull        Pull missing exact model after resolution (default: $PULL_IF_MISSING)
   --timeout-sec N           curl max time per test request (default: $TIMEOUT_SEC)
+  --cold-mode MODE          observed|verified. Verified only labels cold when model is absent before first request
   --terminal-summary / --no-terminal-summary  Print <=50-line ASCII summary (default: $PRINT_TERMINAL_SUMMARY)
   --zip / --no-zip          Create combined ~/tmp zip archive (default: $ZIP_ON_EXIT)
   -h, --help                Show help
@@ -208,6 +210,7 @@ while [[ $# -gt 0 ]]; do
     --pull) PULL_IF_MISSING=1; shift ;;
     --no-pull) PULL_IF_MISSING=0; shift ;;
     --timeout-sec) TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --cold-mode|--load-mode) COLD_MODE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --terminal-summary) PRINT_TERMINAL_SUMMARY=1; shift ;;
     --no-terminal-summary) PRINT_TERMINAL_SUMMARY=0; shift ;;
     --zip) ZIP_ON_EXIT=1; shift ;;
@@ -222,6 +225,7 @@ done
 
 for n in INTERVAL NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT TIMEOUT_SEC CONNECT_TIMEOUT_SEC; do is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }; done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
+case "$COLD_MODE" in observed|verified|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --cold-mode must be observed, verified, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
 [[ "$INTERVAL" -ge 1 ]] || INTERVAL=1
 [[ "$CONCURRENCY" -ge 1 ]] || CONCURRENCY=1
 
@@ -336,13 +340,15 @@ make_terminal_summary() {
         function col(n){return (h[n] ? unq($(h[n])) : "")}
         NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
         {
-          rows++; cat=col("category"); mode=col("mode"); conc=col("concurrency"); err=col("error"); gen=col("gen_tps")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; endpoint=col("endpoint");
+          rows++; cat=col("category"); mode=col("mode"); conc=col("concurrency"); err=col("error"); cls=col("error_class"); gen=col("gen_tps")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; endpoint=col("endpoint"); sample=col("sample_status"); ttfta=col("ttft_any_ms"); ttftans=col("ttft_answer_ms"); e2e500=col("end_to_end_500_ms");
           if(err!="") errors++;
+          if(cls=="unsupported_generate_for_embedding_model") unsupported=1;
+          if(sample=="SHORT_SAMPLE") short_samples++;
           if(mode=="EMBED" || endpoint=="/api/embed" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(err=="") embed_ok++; if(cat=="embedding_longctx"){elong_seen=1; elong_err=err; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}}
-          else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>cold)cold=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warmn++; warmsum+=gen; if(warmn==1||gen>wmax)wmax=gen; if(warmn==1||gen<wmin)wmin=gen}; if(cat=="longctx"){long_seen=1; long_err=err; longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
+          else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>cold)cold=load; if(ttfta!=""){ttfta_n++; ttfta_sum+=ttfta}; if(ttftans!=""){ttftans_n++; ttftans_sum+=ttftans}; if(e2e500!=""){e2e_n++; e2e_sum+=e2e500}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0&&sample!="SHORT_SAMPLE"){warmn++; warmsum+=gen; if(warmn==1||gen>wmax)wmax=gen; if(warmn==1||gen<wmin)wmin=gen}; if(cat=="longctx"){long_seen=1; long_err=err; longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
         }
         END{
-          status=(errors>0?"FAIL":((thinkonly>0||longfill<35&&gen_rows>0)?"PASS_WITH_WARNINGS":"PASS")); printf "Test    : %s\n", status;
+          status=(unsupported?"UNSUPPORTED":(errors>0?"FAIL":((thinkonly>0||short_samples>0||longfill<35&&gen_rows>0)?"PASS_WITH_WARNINGS":"PASS"))); printf "Test    : %s\n", status;
           if(embed_rows>0 && gen_rows==0){
             if(embed_tps_n>0) printf "Embed   : vectors=%d dim=%d rows=%d ok=%d avg=%.2f embeds/s\n", embed_vectors, embed_dim, embed_rows, embed_ok, embed_tps_sum/embed_tps_n; else printf "Embed   : vectors=%d dim=%d rows=%d ok=%d\n", embed_vectors, embed_dim, embed_rows, embed_ok;
             if(elong_seen && elong_err=="") printf "LongEmb : prompt_tokens=%d ctx=%d fill=%.1f%% %s\n", elong_pe, elong_ctx, elong_fill, (elong_fill>=minfill?"OK":"UNDERFILLED"); else if(elong_seen) print "LongEmb : N/A; request failed before prompt evaluation"; else print "LongEmb : N/A; embedding long-context row not run";
@@ -350,10 +356,11 @@ make_terminal_summary() {
             if(errors==0) print "Inference: PASS; completed embedding benchmark"; else print "Inference: INCONCLUSIVE; embedding benchmark did not complete cleanly";
           } else {
             if(warmn>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Warm    : no valid warm single GPU rows";
-            printf "Cold    : first-load %.2fs\n", cold;
+            printf "FirstReqLoad: %.2fs Ollama load_duration; not verified disk-cold\n", cold;
+            if(ttfta_n>0 || ttftans_n>0 || e2e_n>0) printf "Latency : ttft_any_ms=%s ttft_answer_ms=%s end_to_end_500_ms=%s\n", (ttfta_n?sprintf("%.1f",ttfta_sum/ttfta_n):"N/A"), (ttftans_n?sprintf("%.1f",ttftans_sum/ttftans_n):"N/A"), (e2e_n?sprintf("%.1f",e2e_sum/e2e_n):"N/A");
             if(long_seen && long_err=="") printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", longpe, longctx, longfill, longgen, (longfill>=minfill?"OK":"UNDERFILLED"); else if(long_seen) print "LongCtx : N/A; request failed before prompt evaluation"; else print "LongCtx : N/A; long-context row not run";
-            printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", visible, rows, thinkonly, errors;
-            if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
+            printf "Output  : visible rows %d/%d; thinking-only %d; short-sample %d; errors %d\n", visible, rows, thinkonly, short_samples, errors;
+            if(unsupported) print "Inference: UNSUPPORTED; embedding-only model was not generation-tested"; else if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
           }
         }' "$test_csv"
     else
@@ -380,7 +387,7 @@ make_terminal_summary() {
         function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
         NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
         {n++; util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
-        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Telemetry: %s; GPU samples %d avg-util %.1f%% max-util %.0f%%\n", verdict, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw=%d sw_power=%d lowclk_obs=%d memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$monitor_csv"
+        END{pct=(last_total?100*max_vram/last_total:0); swpct=(n?100*swc/n:0); verdict="PASS"; if(tc>0||hwc>0)verdict="CRITICAL"; else if(tw>0||vh>0||swpct>10||pcie_warn>0)verdict="WARN"; printf "Telemetry: %s; GPU samples %d avg-util %.1f%% max-util %.0f%%\n", verdict, n, (n?sum_util/n:0), max_util; printf "Thermal : PASS core max %.0fC; memory junction %s\n", max_temp, (memmiss==n?"unknown":"sampled"); printf "Power   : %s power-cap active %.1f%% samples; hw_slowdown=%d\n", (hwc>0?"CRITICAL":(swpct>10?"WARN":"INFO")), swpct, hwc; printf "VRAM    : %s max-used %.0f MiB / %.0f MiB (%.1f%%)\n", (pct>=97?"WARN":(pct>=92?"WARN":"INFO")), max_vram, last_total, pct; printf "PCIe    : %s gen %s width x%s / max x%s; resident decode may still be valid, load/offload may suffer\n", (last_pw>0&&last_pmw>0&&last_pw<last_pmw?"WARN":"INFO"), last_pg, last_pw, last_pmw; printf "Throttle: hw=%d sw_power=%d lowclk_obs=%d memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$monitor_csv"
     else
       echo "Telemetry: monitor CSV not found"
     fi
@@ -507,7 +514,7 @@ TEST_ARGS=(
   --num-ctx "$NUM_CTX" --long-ctx "$LONG_CTX" --num-predict "$NUM_PREDICT" --long-num-predict "$LONG_NUM_PREDICT" --long-prompt-words "$LONG_PROMPT_WORDS"
   --concurrency "$CONCURRENCY" --timeout-sec "$TIMEOUT_SEC" --think "$THINK" --soak-minutes "$SOAK_MINUTES" --soak-num-predict "$SOAK_NUM_PREDICT"
   --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT"
-  --no-terminal-summary --no-zip --no-ensure-server --server-log-lines "$SERVER_LOG_LINES"
+  --cold-mode "$COLD_MODE" --no-terminal-summary --no-zip --no-ensure-server --server-log-lines "$SERVER_LOG_LINES"
 )
 [[ "$EMBEDDING_MODE" == "1" ]] && TEST_ARGS+=(--embedding)
 [[ "$FULL_MODEL_SHOW" == "1" ]] && TEST_ARGS+=(--full-model-show)

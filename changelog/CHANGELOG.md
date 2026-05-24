@@ -1,3 +1,14 @@
+# v1.7.0 - role-aware bench routing, latency metrics, and calibrated RTX 3090 diagnostics
+
+- Added `ollama bench MODEL`, backed by `scripts/ollama-bench-RTX3090.sh`, to auto-detect model role and route generation-capable models to `/api/generate` benchmarks and embedding-only models to `/api/embed`.
+- Kept `ollama test MODEL` strict generation-only. Embedding-only models now report `UNSUPPORTED` for generation, preserve the full model tag in the suggested `ollama embed-test MODEL:TAG` command, and exit with code 2.
+- Renamed the terminal "Cold" summary wording to `FirstReqLoad` so Ollama `load_duration` is not misrepresented as verified disk-cold timing. Added `--cold-mode verified` precondition tracking.
+- Switched generation rows to streaming `/api/generate` instrumentation and added `ttft_any_ms`, `ttft_thinking_ms`, `ttft_answer_ms`, `end_to_end_500_ms`, `decode_tps_raw`, `visible_answer_tps`, and `thinking_only` fields to `summary.csv`.
+- Added `SHORT_SAMPLE` marking for unstable output-length rows so early-stopped throughput/sustained/long-context samples are not treated as clean ranking rows.
+- Expanded `/api/embed` coverage with batch-32 and RAG-profile rows, plus separate embeddings-per-second and embedding-token-throughput fields.
+- Made slim `/api/show` metadata extraction architecture-agnostic by scanning dynamic `*.context_length` and `*.embedding_length` keys such as `gptoss.context_length`, `qwen35.context_length`, and `qwen35moe.context_length`.
+- Calibrated monitor and orchestrator hardware wording: power-cap activity is reported as normal/warn power-limit behavior, hardware slowdown remains critical, memory junction temperature can be unknown, and PCIe Gen3 x8 is framed as a load/offload/concurrency warning rather than automatic resident-decode failure.
+
 # v1.6.0 - capability-aware model roles and embedding benchmark mode
 
 - Reviewed the `bge-m3` failure and classified it as an embedding-only model being sent to `/api/generate`, not as an RTX 3090/Ollama service failure.
