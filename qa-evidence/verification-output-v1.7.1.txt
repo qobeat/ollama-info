@@ -1,0 +1,33 @@
+## bash syntax
+PASS bash -n ollama-bench-RTX3090.sh
+PASS bash -n ollama-common.sh
+PASS bash -n ollama-download.sh
+PASS bash -n ollama-embed-test-RTX3090.sh
+PASS bash -n ollama-monitor.sh
+PASS bash -n ollama-test-RTX3090.sh
+PASS bash -n ollama-test-and-monitor-RTX3090.sh
+
+## direct benchmark fake verification
+PASS direct load state model_switch_observed
+PASS direct cold_verified=0
+PASS direct CPU/GPU offload warning
+PASS direct WarmTTFT split
+PASS direct model-switch warning
+
+## orchestrator source/report semantics
+PASS orchestrator source uses single-request label
+PASS stale single GPU label removed from orchestrator source
+PASS orchestrator source emits residency warning
+
+## monitor fake verification
+PASS monitor residency/offload section
+PASS monitor offload row count
+
+## package hygiene
+PASS package hygiene pre-archive
+
+Notes:
+- Deterministic fake Ollama/NVIDIA shims validate report semantics only.
+- Fake telemetry values are not used as hardware-performance evidence.
+- Real performance conclusions are based on the user-provided result archives.
+PASS evidence-ledger JSONL parse

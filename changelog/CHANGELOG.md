@@ -1,5 +1,15 @@
 # v1.7.0 - role-aware benchmark routing, latency metrics, load-state semantics, and cleanup
 
+## v1.7.1 - load-state/offload evidence fix
+
+- Tightened observed-mode FirstReqLoad semantics: observed mode no longer claims verified cold merely because the tested model was absent.
+- Added model-switch detection when another model is resident before a benchmark.
+- Added post-run Ollama residency/offload classification from `ollama ps`.
+- Replaced misleading orchestrator `single GPU` label with `single-request` unless full-GPU residency is established.
+- Split TTFT reporting into FirstTTFT, WarmTTFT, and TTFTall.
+- Added monitor report section for CPU/GPU mixed residency.
+
+
 - Added `scripts/ollama-bench-RTX3090.sh` and Bash wrapper support for `ollama bench MODEL`, which auto-routes generation-capable models to `/api/generate` and embedding-only models to `/api/embed`; `--route-only` prints the route without running a benchmark.
 - Changed strict generation behavior for embedding-only models from generic benchmark failure to `UNSUPPORTED`, exit code `2`, tag-preserving next actions, and zero API error-row inflation.
 - Expanded embedding benchmark mode to four `/api/embed` rows: sanity, 32-item batch, long-context, and RAG-profile chunks.

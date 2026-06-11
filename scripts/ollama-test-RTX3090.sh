@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-latency-agentic-cleanup"
+VERSION="1.7.1"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.1-loadstate-offload-ttft-fix"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -778,41 +778,159 @@ model_resident_in_file() {
   grep -F -- "$model_name" "$file" >/dev/null 2>&1
 }
 
-assess_load_state() {
-  MODEL_RESIDENT_BEFORE="absent"
-  if model_resident_in_file "$RUN_DIR/ollama-api-ps-before.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before.txt" "$MODEL"; then
-    MODEL_RESIDENT_BEFORE="present"
+loaded_model_names_from_file() {
+  local file="${1:-}"
+  [[ -s "$file" ]] || return 0
+  if [[ "$file" == *.json ]]; then
+    jq -r '(.models // [])[]? | (.name // .model // empty)' "$file" 2>/dev/null | sed '/^$/d' || true
+  else
+    awk 'NR>1 && $1!="NAME" && $1!="" {print $1}' "$file" 2>/dev/null || true
   fi
+}
+
+loaded_model_names_before() {
+  local names=""
+  names="$(loaded_model_names_from_file "$RUN_DIR/ollama-api-ps-before.json" | sort -u | tr '
+' ',' | sed 's/,$//')"
+  if [[ -z "$names" ]]; then
+    names="$(loaded_model_names_from_file "$RUN_DIR/ollama-ps-before.txt" | sort -u | tr '
+' ',' | sed 's/,$//')"
+  fi
+  printf '%s
+' "$names"
+}
+
+loaded_model_names_for_prefix() {
+  local prefix="$1" names=""
+  names="$(loaded_model_names_from_file "$RUN_DIR/ollama-api-ps-$prefix.json" | sort -u | tr '
+' ',' | sed 's/,$//')"
+  if [[ -z "$names" ]]; then
+    names="$(loaded_model_names_from_file "$RUN_DIR/ollama-ps-$prefix.txt" | sort -u | tr '
+' ',' | sed 's/,$//')"
+  fi
+  printf '%s
+' "$names"
+}
+
+count_csv_names() {
+  local csv="${1:-}"
+  [[ -n "$csv" ]] || { echo 0; return 0; }
+  awk -F',' 'NF>0{print NF}' <<<"$csv"
+}
+
+csv_contains_name() {
+  local csv="${1:-}" needle="${2:-}"
+  [[ -n "$csv" && -n "$needle" ]] || return 1
+  awk -F',' -v n="$needle" '{for(i=1;i<=NF;i++) if($i==n) found=1} END{exit found?0:1}' <<<"$csv"
+}
+
+model_processor_from_ps_file() {
+  local file="${1:-}" model_name="${2:-}"
+  [[ -s "$file" && -n "$model_name" ]] || return 0
+  awk -v m="$model_name" '
+    NR>1 && $1==m {
+      p=""
+      # ollama ps columns split SIZE into two fields, so PROCESSOR starts at field 5.
+      for(i=5;i<=NF;i++){
+        if($i ~ /^[0-9]+$/) break
+        p=(p==""?$i:p" "$i)
+      }
+      print p
+      exit
+    }' "$file" 2>/dev/null || true
+}
+
+model_processor_after() {
+  model_processor_from_ps_file "$RUN_DIR/ollama-ps-after.txt" "$MODEL"
+}
+
+processor_residency_state() {
+  local processor="${1:-}"
+  if [[ -z "$processor" ]]; then
+    echo "unknown"
+  elif [[ "$processor" == "100% GPU" ]]; then
+    echo "full_gpu"
+  elif [[ "$processor" == *CPU* && "$processor" == *GPU* ]]; then
+    echo "cpu_gpu_offload"
+  elif [[ "$processor" == *CPU* ]]; then
+    echo "cpu_only_or_cpu_heavy"
+  else
+    echo "non_full_gpu"
+  fi
+}
+
+assess_load_state() {
+  RESIDENT_MODELS_BEFORE="$(loaded_model_names_before)"
+  RESIDENT_COUNT_BEFORE="$(count_csv_names "$RESIDENT_MODELS_BEFORE")"
+  OTHER_MODELS_RESIDENT_BEFORE="0"
+  MODEL_RESIDENT_BEFORE="absent_all_clear"
+  LOAD_STATE_VERDICT="observed_absent_clean"
+
+  if csv_contains_name "$RESIDENT_MODELS_BEFORE" "$MODEL"; then
+    MODEL_RESIDENT_BEFORE="present"
+    LOAD_STATE_VERDICT="warm_or_resident_before"
+  elif [[ "${RESIDENT_COUNT_BEFORE:-0}" -gt 0 ]]; then
+    MODEL_RESIDENT_BEFORE="tested_absent_other_present"
+    OTHER_MODELS_RESIDENT_BEFORE="1"
+    LOAD_STATE_VERDICT="model_switch_observed"
+  fi
+
   COLD_VERIFIED="0"
   if [[ "$LOAD_MODE" == "warm" ]]; then
+    LOAD_STATE_VERDICT="warm_requested"
     COLD_VERIFIED="0"
   elif [[ "$LOAD_MODE" == "unload-model" ]]; then
     ollama_unload_model || true
     snapshot_before_after before-unload-check
-    if model_resident_in_file "$RUN_DIR/ollama-api-ps-before-unload-check.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before-unload-check.txt" "$MODEL"; then
+    local after_unload_names after_unload_count
+    after_unload_names="$(loaded_model_names_for_prefix before-unload-check)"
+    after_unload_count="$(count_csv_names "$after_unload_names")"
+    if csv_contains_name "$after_unload_names" "$MODEL"; then
       COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="present_after_unload_failed"
+      LOAD_STATE_VERDICT="unload_failed_model_still_resident"
+    elif [[ "${after_unload_count:-0}" -gt 0 ]]; then
+      COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="tested_absent_after_unload_other_present"
+      OTHER_MODELS_RESIDENT_BEFORE="1"
+      LOAD_STATE_VERDICT="unload_verified_but_other_model_resident"
     else
       COLD_VERIFIED="1"
       MODEL_RESIDENT_BEFORE="absent_after_unload"
+      LOAD_STATE_VERDICT="cold_verified_after_unload"
     fi
   elif [[ "$LOAD_MODE" == "restart-ollama" ]]; then
     ollama_restart_service || true
     sleep 2
     snapshot_before_after before-restart-check
-    if model_resident_in_file "$RUN_DIR/ollama-api-ps-before-restart-check.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before-restart-check.txt" "$MODEL"; then
+    local after_restart_names after_restart_count
+    after_restart_names="$(loaded_model_names_for_prefix before-restart-check)"
+    after_restart_count="$(count_csv_names "$after_restart_names")"
+    if csv_contains_name "$after_restart_names" "$MODEL"; then
       COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="present_after_restart"
+      LOAD_STATE_VERDICT="restart_attempt_model_still_resident"
+    elif [[ "${after_restart_count:-0}" -gt 0 ]]; then
+      COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="tested_absent_after_restart_other_present"
+      OTHER_MODELS_RESIDENT_BEFORE="1"
+      LOAD_STATE_VERDICT="restart_verified_but_other_model_resident"
     else
       COLD_VERIFIED="1"
       MODEL_RESIDENT_BEFORE="absent_after_restart"
+      LOAD_STATE_VERDICT="cold_verified_after_restart"
     fi
-  elif [[ "$MODEL_RESIDENT_BEFORE" == "absent" ]]; then
-    COLD_VERIFIED="1"
   fi
+
   {
     echo "load_mode=$LOAD_MODE"
     echo "model_resident_before=$MODEL_RESIDENT_BEFORE"
+    echo "resident_count_before=$RESIDENT_COUNT_BEFORE"
+    echo "resident_models_before=${RESIDENT_MODELS_BEFORE:-none}"
+    echo "other_models_resident_before=$OTHER_MODELS_RESIDENT_BEFORE"
+    echo "load_state_verdict=$LOAD_STATE_VERDICT"
     echo "cold_verified=$COLD_VERIFIED"
-    echo "note=FirstReqLoad is Ollama load_duration on first request; it is ColdVerified only when Ollama ps/API ps proves the model was absent before the first benchmark request or after a verified unload/restart."
+    echo "note=FirstReqLoad is Ollama load_duration on the first benchmark request. ColdVerified is only 1 after an explicit unload/restart check leaves no loaded models. In observed mode, absent tested model is reported as observed_absent_clean or model_switch_observed, not verified cold."
   } >"$LOAD_STATE_FILE"
 }
 
@@ -1187,8 +1305,22 @@ make_summary_md() {
     echo "- run_dir: $RUN_DIR"
     echo "- archive: ${ARCHIVE_PATH:-pending}"; echo
     echo "## Load-state semantics"; echo '```text'; cat "$LOAD_STATE_FILE" 2>/dev/null || true; echo '```'; echo
+    local processor_after residency_state
+    processor_after="$(model_processor_after)"
+    residency_state="$(processor_residency_state "$processor_after")"
+    echo "## Residency/offload classification"; echo
+    echo "- processor_after: ${processor_after:-unknown}"
+    echo "- residency_state: $residency_state"
+    if [[ "$residency_state" == "cpu_gpu_offload" || "$residency_state" == "cpu_only_or_cpu_heavy" || "$residency_state" == "non_full_gpu" ]]; then
+      echo "- warning: CPU/offload or non-full-GPU residency detected; decode/load numbers are not a clean full-GPU-resident benchmark."
+    elif [[ "$residency_state" == "full_gpu" ]]; then
+      echo "- warning: none; tested model is reported as 100% GPU resident after the run."
+    else
+      echo "- warning: residency unknown; inspect ollama-ps-after.txt."
+    fi
+    echo
     echo "## Classified metrics"; echo
-    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" '
+    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" -v loadver="$LOAD_STATE_VERDICT" -v resident="$MODEL_RESIDENT_BEFORE" '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
@@ -1199,7 +1331,7 @@ make_summary_md() {
         if(sample=="SHORT_SAMPLE") short_samples++;
         if(sample=="UNDERFILLED") underfilled++;
         if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
-        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>first_load) first_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warmn++; warmsum+=vis}; if(cat=="longctx"){long_seen=1; longgen=gen; longvis=vis; longpe=pe; longctx=ctx; longfill=fill; longsample=sample}; if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa}; if(ttfans>0){ttfans_n++; ttfans_sum+=ttfans}; if(e2e500>0){e2e_n++; e2e_sum+=e2e500}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"){first_ttfa=ttfa; first_ttfans=ttfans}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warmn++; warmsum+=vis; if(ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(ttfans>0){warm_ttfans_n++; warm_ttfans_sum+=ttfans}}; if(cat=="longctx"){long_seen=1; longgen=gen; longvis=vis; longpe=pe; longctx=ctx; longfill=fill; longsample=sample; long_ttfa=ttfa; long_ttfans=ttfans}; if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa}; if(ttfans>0){ttfans_n++; ttfans_sum+=ttfans}; if(e2e500>0){e2e_n++; e2e_sum+=e2e500}}
       }
       END{
         printf "- status_basis: rows=%d errors=%d unsupported=%d short_samples=%d underfilled=%d visible_rows=%d thinking_only=%d embedding_rows=%d\n", rows, errors, unsupported, short_samples, underfilled, visible, thinkonly, embed_rows;
@@ -1208,7 +1340,7 @@ make_summary_md() {
         else if(short_samples>0 || underfilled>0){print "- result_state: PASS_WITH_WARNINGS"}
         else {print "- result_state: PASS"}
         if(embed_rows>0 && gen_rows==0){ if(embed_tps_n>0) printf "- embedding: vectors=%d dim=%d rows_ok=%d avg_embeddings_per_s=%.2f\n", embed_vectors, embed_dim, embed_ok, embed_tps_sum/embed_tps_n; else printf "- embedding: vectors=%d dim=%d rows_ok=%d\n", embed_vectors, embed_dim, embed_ok; if(elong_seen) printf "- embedding_long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% sample_status=%s\n", elong_pe, elong_ctx, elong_fill, elong_sample; }
-        else { if(warmn>0) printf "- warm_visible_answer_tps_avg: %.2f across %d OK rows\n", warmsum/warmn, warmn; else print "- warm_visible_answer_tps_avg: N/A; no OK visible-answer warm rows"; printf "- first_request_load_s: %.2f\n", first_load; printf "- cold_verified: %s\n", cold; if(ttfa_n>0) printf "- ttft_any_ms_avg: %.1f\n", ttfa_sum/ttfa_n; if(ttfans_n>0) printf "- ttft_answer_ms_avg: %.1f\n", ttfans_sum/ttfans_n; if(e2e_n>0) printf "- end_to_end_500_ms_est_avg: %.1f\n", e2e_sum/e2e_n; if(long_seen) printf "- long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% decode_tps_raw=%.2f visible_answer_tps=%.2f sample_status=%s\n", longpe, longctx, longfill, longgen, longvis, longsample; }
+        else { if(warmn>0) printf "- warm_visible_answer_tps_avg: %.2f across %d OK rows\n", warmsum/warmn, warmn; else print "- warm_visible_answer_tps_avg: N/A; no OK visible-answer warm rows"; printf "- first_request_load_s: %.2f\n", first_load; printf "- load_state_verdict: %s\n", loadver; printf "- model_resident_before: %s\n", resident; printf "- cold_verified: %s\n", cold; if(first_ttfa>0) printf "- first_request_ttft_any_ms: %.1f\n", first_ttfa; if(first_ttfans>0) printf "- first_request_ttft_answer_ms: %.1f\n", first_ttfans; if(warm_ttfa_n>0) printf "- warm_ttft_any_ms_avg: %.1f across %d OK throughput/sustained rows\n", warm_ttfa_sum/warm_ttfa_n, warm_ttfa_n; if(warm_ttfans_n>0) printf "- warm_ttft_answer_ms_avg: %.1f across %d OK throughput/sustained rows\n", warm_ttfans_sum/warm_ttfans_n, warm_ttfans_n; if(ttfa_n>0) printf "- ttft_any_ms_avg_all_rows: %.1f\n", ttfa_sum/ttfa_n; if(ttfans_n>0) printf "- ttft_answer_ms_avg_all_rows: %.1f\n", ttfans_sum/ttfans_n; if(e2e_n>0) printf "- end_to_end_500_ms_est_avg: %.1f\n", e2e_sum/e2e_n; if(long_seen) printf "- long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% decode_tps_raw=%.2f visible_answer_tps=%.2f sample_status=%s ttft_any_ms=%.1f ttft_answer_ms=%.1f\n", longpe, longctx, longfill, longgen, longvis, longsample, long_ttfa, long_ttfans; }
       }' "$SUMMARY_CSV"
     if [[ -s "$CONC_AGG_CSV" ]]; then echo; echo "## Concurrency aggregate"; echo '```csv'; cat "$CONC_AGG_CSV"; echo '```'; fi
     if [[ -s "$SOAK_SUMMARY_CSV" ]]; then echo; echo "## Soak aggregate"; echo '```csv'; cat "$SOAK_SUMMARY_CSV"; echo '```'; fi
@@ -1246,7 +1378,7 @@ make_terminal_summary() {
     echo "API     : $BASE_URL"
     echo "Think   : $THINK"
     echo "Stream  : $STREAM_GENERATION"
-    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" '
+    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" -v loadver="$LOAD_STATE_VERDICT" -v resident="$MODEL_RESIDENT_BEFORE" '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
@@ -1257,7 +1389,7 @@ make_terminal_summary() {
         if(sample=="SHORT_SAMPLE") short_samples++;
         if(sample=="UNDERFILLED") underfilled++;
         if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
-        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>first_load) first_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warm_n++; warm_sum+=vis; if(warm_n==1||vis>warm_max)warm_max=vis; if(warm_n==1||vis<warm_min)warm_min=vis}; if(cat=="longctx"){long_seen=1; long_gen=gen; long_vis=vis; long_fill=fill; long_pe=pe; long_ctx=ctx; long_sample=sample}; if(any>0){any_n++; any_sum+=any}; if(ans>0){ans_n++; ans_sum+=ans}; if(e2e>0){e2e_n++; e2e_sum+=e2e}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"){first_any=any; first_ans=ans}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warm_n++; warm_sum+=vis; if(warm_n==1||vis>warm_max)warm_max=vis; if(warm_n==1||vis<warm_min)warm_min=vis; if(any>0){warm_any_n++; warm_any_sum+=any}; if(ans>0){warm_ans_n++; warm_ans_sum+=ans}}; if(cat=="longctx"){long_seen=1; long_gen=gen; long_vis=vis; long_fill=fill; long_pe=pe; long_ctx=ctx; long_sample=sample; long_any=any; long_ans=ans}; if(any>0){any_n++; any_sum+=any}; if(ans>0){ans_n++; ans_sum+=ans}; if(e2e>0){e2e_n++; e2e_sum+=e2e}}
         if(total>max_total)max_total=total
       }
       END{
@@ -1272,14 +1404,32 @@ make_terminal_summary() {
           print "Inference: UNSUPPORTED; selected model role does not support /api/generate";
         } else {
           if(warm_n>0) printf "Warm    : visible-answer %.2f tok/s avg (%.2f-%.2f), OK rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no OK visible-answer warm rows";
-          printf "FirstReqLoad: %.2fs; ColdVerified=%s; max total %.2fs\n", first_load, cold, max_total;
-          if(any_n>0) printf "TTFT    : any %.1f ms avg; answer %s\n", any_sum/any_n, (ans_n>0?sprintf("%.1f ms avg", ans_sum/ans_n):"N/A"); else print "TTFT    : N/A; streaming metrics unavailable";
+          printf "FirstReqLoad: %.2fs; LoadState=%s; ColdVerified=%s; max total %.2fs\n", first_load, loadver, cold, max_total;
+          if(first_any>0) printf "FirstTTFT: any %.1f ms; answer %s\n", first_any, (first_ans>0?sprintf("%.1f ms", first_ans):"N/A");
+          if(warm_any_n>0 || warm_ans_n>0) printf "WarmTTFT: any %s; answer %s\n", (warm_any_n>0?sprintf("%.1f ms avg", warm_any_sum/warm_any_n):"N/A"), (warm_ans_n>0?sprintf("%.1f ms avg", warm_ans_sum/warm_ans_n):"N/A");
+          if(any_n>0) printf "TTFTall : any %.1f ms avg; answer %s\n", any_sum/any_n, (ans_n>0?sprintf("%.1f ms avg", ans_sum/ans_n):"N/A"); else print "TTFT    : N/A; streaming metrics unavailable";
           if(e2e_n>0) printf "E2E500  : %.1f ms estimated avg\n", e2e_sum/e2e_n;
-          if(long_seen) printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% decode=%.2f visible=%.2f %s\n", long_pe, long_ctx, long_fill, long_gen, long_vis, long_sample; else print "LongCtx : N/A; long-context row not run";
+          if(long_seen) printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% decode=%.2f visible=%.2f ttft=%.1f/%.1f %s\n", long_pe, long_ctx, long_fill, long_gen, long_vis, long_any, long_ans, long_sample; else print "LongCtx : N/A; long-context row not run";
           printf "Output  : visible rows %d/%d; thinking-only %d; errors %d; short=%d underfilled=%d\n", visible, rows, think_only, errors, short_samples, underfilled;
           if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
         }
       }' "$SUMMARY_CSV"
+    local processor_after residency_state
+    processor_after="$(model_processor_after)"
+    residency_state="$(processor_residency_state "$processor_after")"
+    if [[ "$residency_state" == "full_gpu" ]]; then
+      echo "Residency: full GPU ($processor_after)"
+    elif [[ "$residency_state" == "unknown" ]]; then
+      echo "Residency: unknown; inspect ollama-ps-after.txt"
+    else
+      echo "Residency: WARN $residency_state ($processor_after); not a clean full-GPU-resident benchmark"
+    fi
+    if [[ "${OTHER_MODELS_RESIDENT_BEFORE:-0}" == "1" ]]; then
+      echo "LoadWarn : other model(s) resident before benchmark: ${RESIDENT_MODELS_BEFORE:-unknown}; FirstReqLoad includes model-switch/eviction effects"
+    fi
+    if [[ "$LOAD_MODE" == "observed" && "$COLD_VERIFIED" != "1" ]]; then
+      echo "LoadNote : observed mode does not claim verified-cold load; use --load-mode unload-model or restart-ollama for verification"
+    fi
     if [[ -s "$FAILURE_HINTS" ]] && ! grep -q '^primary_error_class=none$' "$FAILURE_HINTS"; then
       awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$FAILURE_HINTS" | head -5
     fi

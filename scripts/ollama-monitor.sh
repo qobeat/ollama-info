@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.0"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.7.0-calibrated-hardware-warnings"
+VERSION="1.7.1"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.7.1-offload-residency-warnings"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -388,6 +388,37 @@ generate_report() {
     echo "- nvidia_compute_app_rows: $compute_apps"
     if [[ "$loaded_cli" -eq 0 && "$loaded_api" -eq 0 ]]; then
       echo "- note: no Ollama-loaded model snapshot was observed; thermal/power/PCIe health may describe idle or failed-load telemetry, not completed inference stability."
+    fi
+    echo
+    echo "## Ollama residency/offload classification"
+    if [[ -s "$OLLAMA_PS_FILE" ]]; then
+      awk '
+        /^--- /{ts=$0; next}
+        /^[[:space:]]*$/ || /^NAME[[:space:]]/ || /ollama CLI not found/ || /Error:/ {next}
+        {
+          name=$1; proc=""
+          for(i=5;i<=NF;i++){
+            if($i ~ /^[0-9]+$/) break
+            proc=(proc==""?$i:proc" "$i)
+          }
+          if(proc=="") next
+          total++
+          if(proc=="100% GPU") fullgpu++
+          else if(proc ~ /CPU\/GPU/ || proc ~ /CPU/) {offload++; if(offload_lines<20){offload_lines++; offline[offload_lines]=ts " " name " processor=" proc}}
+          else {nonfull++; if(nonfull_lines<20){nonfull_lines++; nonline[nonfull_lines]=ts " " name " processor=" proc}}
+        }
+        END{
+          printf "- loaded_model_snapshot_rows: %d\n", total+0
+          printf "- full_gpu_rows: %d\n", fullgpu+0
+          printf "- cpu_or_mixed_offload_rows: %d\n", offload+0
+          printf "- non_full_gpu_unknown_rows: %d\n", nonfull+0
+          if(offload>0){print "- warning: CPU/GPU mixed residency observed; generation numbers are not a clean full-GPU-resident benchmark for those snapshots."; print "- offload_examples:"; for(i=1;i<=offload_lines;i++) print "  - " offline[i]}
+          else if(nonfull>0){print "- warning: non-100%-GPU processor states observed; inspect ollama ps snapshots."}
+          else if(total>0){print "- warning: none; all parsed loaded-model snapshots were 100% GPU."}
+          else {print "- warning: no parseable loaded-model rows."}
+        }' "$OLLAMA_PS_FILE" 2>/dev/null || echo "- warning: could not parse ollama ps snapshots"
+    else
+      echo "- warning: no ollama ps snapshot file"
     fi
     echo
 

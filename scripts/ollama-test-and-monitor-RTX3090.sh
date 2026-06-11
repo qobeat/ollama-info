@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-latency-agentic-cleanup"
+VERSION="1.7.1"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.7.1-loadstate-offload-ttft-fix"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -313,8 +313,45 @@ capture_nvidia_boundary() {
   fi
 }
 
+model_processor_from_ps_file() {
+  local file="${1:-}" model_name="${2:-}"
+  [[ -s "$file" && -n "$model_name" ]] || return 0
+  awk -v m="$model_name" '
+    NR>1 && $1==m {
+      p=""
+      for(i=5;i<=NF;i++){
+        if($i ~ /^[0-9]+$/) break
+        p=(p==""?$i:p" "$i)
+      }
+      print p
+      exit
+    }' "$file" 2>/dev/null || true
+}
+
+processor_residency_state() {
+  local processor="${1:-}"
+  if [[ -z "$processor" ]]; then
+    echo "unknown"
+  elif [[ "$processor" == "100% GPU" ]]; then
+    echo "full_gpu"
+  elif [[ "$processor" == *CPU* && "$processor" == *GPU* ]]; then
+    echo "cpu_gpu_offload"
+  elif [[ "$processor" == *CPU* ]]; then
+    echo "cpu_only_or_cpu_heavy"
+  else
+    echo "non_full_gpu"
+  fi
+}
+
+test_model_processor_after() {
+  local ps_file
+  ps_file="$(latest_file "$TEST_ROOT" ollama-ps-after.txt)"
+  [[ -n "$ps_file" ]] || return 0
+  model_processor_from_ps_file "$ps_file" "$MODEL"
+}
+
 make_terminal_summary() {
-  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail model_role model_mode load_state_file cold_verified model_resident_before
+  local test_csv conc_csv soak_csv monitor_csv test_summary monitor_report hint_file server_log_tail model_role model_mode load_state_file cold_verified model_resident_before load_state_verdict resident_models_before resident_count_before processor_after residency_state
   test_csv="$(latest_file "$TEST_ROOT" summary.csv)"
   conc_csv="$(latest_file "$TEST_ROOT" concurrency-aggregate.csv)"
   soak_csv="$(latest_file "$TEST_ROOT" soak-summary.csv)"
@@ -328,6 +365,11 @@ make_terminal_summary() {
   model_mode="$([[ "$EMBEDDING_MODE" == "1" ]] && echo embedding || echo generation)"
   cold_verified="unknown"
   model_resident_before="unknown"
+  load_state_verdict="unknown"
+  resident_models_before="unknown"
+  resident_count_before="unknown"
+  processor_after="$(test_model_processor_after)"
+  residency_state="$(processor_residency_state "$processor_after")"
   if [[ -n "$test_csv" && -f "$test_csv" ]]; then
     local cap_file
     cap_file="$(latest_file "$TEST_ROOT" model-capability.json)"
@@ -338,8 +380,14 @@ make_terminal_summary() {
   if [[ -n "$load_state_file" && -f "$load_state_file" ]]; then
     cold_verified="$(awk -F= '$1=="cold_verified"{print $2}' "$load_state_file" | tail -1)"
     model_resident_before="$(awk -F= '$1=="model_resident_before"{print $2}' "$load_state_file" | tail -1)"
+    load_state_verdict="$(awk -F= '$1=="load_state_verdict"{print $2}' "$load_state_file" | tail -1)"
+    resident_models_before="$(awk -F= '$1=="resident_models_before"{print $2}' "$load_state_file" | tail -1)"
+    resident_count_before="$(awk -F= '$1=="resident_count_before"{print $2}' "$load_state_file" | tail -1)"
     [[ -n "$cold_verified" ]] || cold_verified="unknown"
     [[ -n "$model_resident_before" ]] || model_resident_before="unknown"
+    [[ -n "$load_state_verdict" ]] || load_state_verdict="unknown"
+    [[ -n "$resident_models_before" ]] || resident_models_before="unknown"
+    [[ -n "$resident_count_before" ]] || resident_count_before="unknown"
   fi
   {
     echo "============================================================"
@@ -350,9 +398,16 @@ make_terminal_summary() {
     echo "Mode    : $model_mode"
     echo "API     : $BASE_URL"
     echo "Status  : test_exit_code=$TEST_RC"
-    echo "TTFT    : stream=$STREAM_GENERATION load_mode=$LOAD_MODE cold_verified=$cold_verified resident_before=$model_resident_before"
+    echo "TTFT    : stream=$STREAM_GENERATION load_mode=$LOAD_MODE load_state=$load_state_verdict cold_verified=$cold_verified resident_before=$model_resident_before resident_models_before=$resident_models_before"
+    if [[ "$residency_state" == "full_gpu" ]]; then
+      echo "Residency: full GPU ($processor_after)"
+    elif [[ "$residency_state" == "unknown" ]]; then
+      echo "Residency: unknown; inspect nested test/ollama-ps-after.txt"
+    else
+      echo "Residency: WARN $residency_state ($processor_after); not a clean full-GPU-resident benchmark"
+    fi
     if [[ -n "$test_csv" && -f "$test_csv" ]]; then
-      awk -F',' '
+      awk -F',' -v loadver="$load_state_verdict" -v cold="$cold_verified" '
         function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
         function col(n){return (h[n] ? unq($(h[n])) : "")}
         function ncol(n){v=col(n); return (v=="" ? 0 : v+0)}
@@ -369,11 +424,12 @@ make_terminal_summary() {
           if(sample=="UNDERFILLED") underfilled++;
           if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa; ttfa_min=minnz(ttfa_min,ttfa); if(ttfa>ttfa_max)ttfa_max=ttfa}
           if(ttftans>0){ttfans_n++; ttfans_sum+=ttftans; ttfans_min=minnz(ttfans_min,ttftans); if(ttftans>ttfans_max)ttfans_max=ttftans}
+          if(cat=="sanity"){first_ttfa=ttfa; first_ttfans=ttftans}
           if(e500>0){e500_n++; e500_sum+=e500}
           if(mode=="EMBED" || endpoint=="/api/embed" || cat ~ /^embedding/) {
             embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(state=="PASS") embed_ok++; if(cat=="embedding_longctx"){elong_seen=1; elong_state=state; elong_sample=sample; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}
           } else {
-            gen_rows++; if(resp>0) answer_rows++; if(resp==0&&think>0) thinkonly++; if(load>firstload) firstload=load; if((visible>0||raw>0||legacy>0) && state=="PASS" && sample=="OK" && mode=="GPU" && col("concurrency")=="1" && (cat=="throughput"||cat=="sustained")){g=(visible>0?visible:(raw>0?raw:legacy)); warmn++; warmsum+=g; wmin=minnz(wmin,g); if(g>wmax)wmax=g}; if(cat=="longctx"){long_seen=1; long_state=state; long_sample=sample; longgen=(visible>0?visible:(raw>0?raw:legacy)); longpe=pe; longctx=ctx; longfill=fill}}
+            gen_rows++; if(resp>0) answer_rows++; if(resp==0&&think>0) thinkonly++; if(load>firstload) firstload=load; if((visible>0||raw>0||legacy>0) && state=="PASS" && sample=="OK" && mode=="GPU" && col("concurrency")=="1" && (cat=="throughput"||cat=="sustained")){g=(visible>0?visible:(raw>0?raw:legacy)); warmn++; warmsum+=g; wmin=minnz(wmin,g); if(g>wmax)wmax=g; if(ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(ttftans>0){warm_ttfans_n++; warm_ttfans_sum+=ttftans}}; if(cat=="longctx"){long_seen=1; long_state=state; long_sample=sample; longgen=(visible>0?visible:(raw>0?raw:legacy)); longpe=pe; longctx=ctx; longfill=fill; long_ttfa=ttfa; long_ttfans=ttftans}}
         }
         END{
           overall="PASS"; if(unsupported>0 && rows==unsupported) overall="UNSUPPORTED"; else if(errors>0) overall="FAIL"; else if(short_samples>0||underfilled>0||thinkonly>0) overall="PASS_WITH_WARNINGS";
@@ -386,9 +442,11 @@ make_terminal_summary() {
             if(elong_seen) printf "LongEmb : prompt_tokens=%d ctx=%d fill=%.1f%% state=%s sample=%s\n", elong_pe, elong_ctx, elong_fill, elong_state, elong_sample; else print "LongEmb : N/A; embedding long-context row not run";
             if(errors==0 && unsupported==0) print "Inference: PASS; completed embedding benchmark"; else print "Inference: INCONCLUSIVE; embedding benchmark did not complete cleanly";
           } else {
-            if(warmn>0) printf "Visible : single GPU %.2f tok/s avg (%.2f-%.2f), valid rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Visible : no valid visible-answer throughput rows";
-            printf "FirstReqLoad: %.2fs observed; ColdVerified requires unload/restart evidence\n", firstload;
-            if(long_seen) printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% visible=%.2f tok/s state=%s sample=%s\n", longpe, longctx, longfill, longgen, long_state, long_sample; else print "LongCtx : N/A; long-context row not run";
+            if(warmn>0) printf "Visible : single-request %.2f tok/s avg (%.2f-%.2f), valid rows %d\n", warmsum/warmn, wmin, wmax, warmn; else print "Visible : no valid visible-answer throughput rows";
+            printf "FirstReqLoad: %.2fs; load_state=%s; cold_verified=%s\n", firstload, loadver, cold;
+            if(first_ttfa>0) printf "FirstTTFT: any %.0fms answer %.0fms\n", first_ttfa, first_ttfans;
+            if(warm_ttfa_n>0 || warm_ttfans_n>0) printf "WarmTTFT: any %s answer %s\n", (warm_ttfa_n>0?sprintf("%.0fms avg", warm_ttfa_sum/warm_ttfa_n):"N/A"), (warm_ttfans_n>0?sprintf("%.0fms avg", warm_ttfans_sum/warm_ttfans_n):"N/A");
+            if(long_seen) printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% visible=%.2f tok/s ttft=%.0f/%.0fms state=%s sample=%s\n", longpe, longctx, longfill, longgen, long_ttfa, long_ttfans, long_state, long_sample; else print "LongCtx : N/A; long-context row not run";
             printf "Output  : visible rows %d/%d; thinking-only %d; errors %d\n", answer_rows, gen_rows, thinkonly, errors;
             if(unsupported>0 && rows==unsupported) print "Inference: UNSUPPORTED; generation benchmark intentionally not run"; else if(errors==0 && answer_rows>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
           }

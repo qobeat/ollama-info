@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-VERSION="1.7.0"
+VERSION="1.7.1"
 
 usage() {
   cat <<EOF_USAGE

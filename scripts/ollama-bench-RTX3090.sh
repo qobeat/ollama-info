@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.0"
-SCRIPT_SIGNATURE="OLLAMA_BENCH_RTX3090_SCRIPT_SIGNATURE=v1.7.0-auto-route-role-aware"
+VERSION="1.7.1"
+SCRIPT_SIGNATURE="OLLAMA_BENCH_RTX3090_SCRIPT_SIGNATURE=v1.7.1-auto-route-role-aware-loadstate"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://localhost:11434}}"
 CONNECT_TIMEOUT_SEC="${CONNECT_TIMEOUT_SEC:-5}"
 MODEL=""

@@ -709,3 +709,7 @@ Full notes are in `changelog/`.
 3. **Prefer systemd for Ollama lifecycle.** Shell variables are client-side only; service variables belong in systemd overrides.
 4. **Make failure modes actionable.** Missing model, ambiguous model, API down, unsupported role, and model-load errors each produce targeted next commands.
 5. **Keep benchmark intent explicit.** Use `ollama bench` for auto-routing, `ollama test` for strict generation, and `ollama embed-test` for strict embedding.
+
+## v1.7.1 maintenance note
+
+v1.7.1 tightens evidence semantics after reviewing real qwen3.6:27b and qwen3.6:35b result archives. Observed-mode `FirstReqLoad` no longer claims verified-cold execution by default; model-switch runs are classified explicitly; and mixed CPU/GPU Ollama residency is reported as an offload warning rather than a clean full-GPU benchmark. Orchestrator throughput wording now uses `single-request` unless full-GPU residency is actually observed.

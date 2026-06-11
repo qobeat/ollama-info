@@ -1,0 +1,13 @@
+ollama-info v1.7.1 atomic requirements
+======================================
+
+AR-1: Bash syntax remains valid for all packaged shell scripts.
+AR-2: Version/signature markers identify v1.7.1 on patched benchmark scripts.
+AR-3: In load_mode=observed, `cold_verified` must not be set to 1 merely because the tested model was absent before the run.
+AR-4: If any non-tested model is resident before the run, load-state must classify the run as `model_switch_observed`.
+AR-5: load-state.txt must include resident_count_before and resident_models_before.
+AR-6: If post-run `ollama ps` shows `15%/85% CPU/GPU`, the terminal and markdown reports must warn that this is not a clean full-GPU-resident benchmark.
+AR-7: Orchestrator output must not label valid throughput as `single GPU` unless full-GPU residency is observed.
+AR-8: Summary output must expose FirstTTFT, WarmTTFT, and TTFTall separately.
+AR-9: Monitor report must include Ollama residency/offload classification derived from `ollama ps` snapshots.
+AR-10: Package hygiene must exclude generated runs, fake shims, caches, legacy folders, nested zips, pyc files, and OS debris.
