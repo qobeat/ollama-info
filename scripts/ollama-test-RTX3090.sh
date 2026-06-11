@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.1"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.1-loadstate-offload-ttft-fix"
+VERSION="1.8"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.8-empty-card-ados-wrapper"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -50,7 +50,10 @@ EMBEDDING_MODE="${EMBEDDING_MODE:-0}"
 FULL_MODEL_SHOW="${FULL_MODEL_SHOW:-0}"
 MODEL_ROLE="${MODEL_ROLE:-unknown}"
 STREAM_GENERATION="${STREAM_GENERATION:-1}"
-LOAD_MODE="${LOAD_MODE:-observed}"
+LOAD_MODE="${LOAD_MODE:-empty-card}"
+TEST_PROFILE="${TEST_PROFILE:-ados}"
+EMPTY_CARD_REQUESTED="0"
+EMPTY_CARD_VERIFIED="0"
 COLD_VERIFIED="0"
 MODEL_RESIDENT_BEFORE="unknown"
 
@@ -75,6 +78,7 @@ API_SHOW_RAW_FILE="$RUN_DIR/ollama-api-show-model-raw.json"
 API_SHOW_FULL_FILE="$RUN_DIR/ollama-api-show-model-full.json"
 MODEL_CAPABILITY_FILE="$RUN_DIR/model-capability.json"
 LOAD_STATE_FILE="$RUN_DIR/load-state.txt"
+CAPABILITY_ANALYSIS="$RUN_DIR/capability-analysis.md"
 DMESG_CURSOR_FILE="$RUN_DIR/dmesg-start-line-count.txt"
 OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 
@@ -116,8 +120,9 @@ Core options:
   --concurrency N           Parallel GPU requests for concurrency probe (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
   --embedding               Run /api/embed benchmark mode instead of /api/generate
+  --profile PROFILE          ados|perf|legacy-perf; default ados runs 3 capability prompts
   --stream / --no-stream     Enable/disable streaming generation instrumentation for TTFT (default: $STREAM_GENERATION)
-  --load-mode MODE           observed|warm|unload-model|restart-ollama; controls load-state semantics (default: $LOAD_MODE)
+  --load-mode MODE           empty-card|observed|warm|unload-model|restart-ollama; default empty-card unloads all resident Ollama models before testing
   --prompt-prefix TEXT      Optional prompt prefix; default is empty
   --server-log-lines N      Capture last N Ollama server log lines when available (default: $SERVER_LOG_LINES)
   --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots
@@ -151,7 +156,7 @@ Usage: $(script_display_cmd) <model-pattern> [options]
 Example: $(script_display_cmd) qwen3.6
 Baseline run: $(script_display_cmd) qwen3.6
 Stress run:   $(script_display_cmd) qwen3.6 --stress
-Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
+Defaults: profile=$TEST_PROFILE ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
 Use -h for full options.
 EOF_SHORT
 }
@@ -207,6 +212,7 @@ while [[ $# -gt 0 ]]; do
     --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --embedding|--embed) EMBEDDING_MODE=1; shift ;;
     --no-embedding|--no-embed) EMBEDDING_MODE=0; shift ;;
+    --profile) TEST_PROFILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --stream) STREAM_GENERATION=1; shift ;;
     --no-stream) STREAM_GENERATION=0; shift ;;
     --load-mode) LOAD_MODE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
@@ -248,7 +254,8 @@ for n in NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS TIMEOUT
   is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }
 done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
-case "$LOAD_MODE" in observed|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --load-mode must be observed, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$LOAD_MODE" in empty-card|observed|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --load-mode must be empty-card, observed, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$TEST_PROFILE" in ados|perf|legacy-perf) ;; *) echo "ERROR: --profile must be ados, perf, or legacy-perf" >&2; exit 2 ;; esac
 case "$STREAM_GENERATION" in 0|1) ;; *) echo "ERROR: --stream/--no-stream must resolve to 0 or 1" >&2; exit 2 ;; esac
 [[ "$CONCURRENCY" -ge 1 ]] || CONCURRENCY=1
 [[ "$LONG_PROMPT_WORDS" -ge 64 ]] || LONG_PROMPT_WORDS=64
@@ -273,6 +280,7 @@ API_SHOW_RAW_FILE="$RUN_DIR/ollama-api-show-model-raw.json"
 API_SHOW_FULL_FILE="$RUN_DIR/ollama-api-show-model-full.json"
 MODEL_CAPABILITY_FILE="$RUN_DIR/model-capability.json"
 LOAD_STATE_FILE="$RUN_DIR/load-state.txt"
+CAPABILITY_ANALYSIS="$RUN_DIR/capability-analysis.md"
 DMESG_CURSOR_FILE="$RUN_DIR/dmesg-start-line-count.txt"
 OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 mkdir -p "$RUN_DIR" "$RAW_DIR" "$PAYLOAD_DIR" "$TMP_DIR"
@@ -355,6 +363,9 @@ write_meta() {
     echo "model_role=$MODEL_ROLE"
     echo "stream_generation=$STREAM_GENERATION"
     echo "load_mode=$LOAD_MODE"
+    echo "test_profile=$TEST_PROFILE"
+    echo "empty_card_requested=$EMPTY_CARD_REQUESTED"
+    echo "empty_card_verified=$EMPTY_CARD_VERIFIED"
     echo "cold_verified=$COLD_VERIFIED"
     echo "model_resident_before=$MODEL_RESIDENT_BEFORE"
     echo "num_ctx=$NUM_CTX"
@@ -859,12 +870,50 @@ processor_residency_state() {
   fi
 }
 
+
+ollama_unload_named_model() {
+  local model_name="$1" role="${2:-unknown}" safe raw payload http err endpoint
+  safe="$(printf '%s' "$model_name" | tr -c 'A-Za-z0-9_.:-' '_' | cut -c1-120)"
+  payload="$RUN_DIR/unload-any-${safe}.request.json"
+  raw="$RUN_DIR/unload-any-${safe}.response.json"
+  http="$RUN_DIR/unload-any-${safe}.http"
+  err="$RUN_DIR/unload-any-${safe}.stderr"
+  [[ -n "$role" && "$role" != "unknown" ]] || role="$(ollama_model_role_common "$model_name" "$BASE_URL" "$CONNECT_TIMEOUT_SEC" 2>/dev/null || printf 'generate')"
+  log "LoadMode: requesting unload for resident model $model_name role=$role"
+  if [[ "$role" == "embedding" ]]; then
+    jq -nc --arg model "$model_name" '{model:$model,input:"unload",keep_alive:0}' >"$payload"
+    ollama_curl_embed "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload" "$raw" "$http" "$err" "$BASE_URL" || true
+  else
+    jq -nc --arg model "$model_name" '{model:$model,prompt:"",stream:false,keep_alive:0,options:{num_predict:0}}' >"$payload"
+    ollama_curl_generate "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload" "$raw" "$http" "$err" "$BASE_URL" || true
+  fi
+}
+
+ollama_unload_all_loaded_models() {
+  local names name role
+  names="$(loaded_model_names_before)"
+  if [[ -z "$names" ]]; then
+    log "LoadMode: empty-card requested; no resident Ollama models detected before unload"
+    return 0
+  fi
+  log "LoadMode: empty-card requested; unloading resident Ollama model(s): $names"
+  IFS=',' read -r -a __loaded_models <<<"$names"
+  for name in "${__loaded_models[@]}"; do
+    [[ -n "$name" ]] || continue
+    role="$(ollama_model_role_common "$name" "$BASE_URL" "$CONNECT_TIMEOUT_SEC" 2>/dev/null || printf 'generate')"
+    ollama_unload_named_model "$name" "$role" || true
+  done
+  sleep 1
+}
+
 assess_load_state() {
   RESIDENT_MODELS_BEFORE="$(loaded_model_names_before)"
   RESIDENT_COUNT_BEFORE="$(count_csv_names "$RESIDENT_MODELS_BEFORE")"
   OTHER_MODELS_RESIDENT_BEFORE="0"
   MODEL_RESIDENT_BEFORE="absent_all_clear"
   LOAD_STATE_VERDICT="observed_absent_clean"
+  EMPTY_CARD_REQUESTED="0"
+  EMPTY_CARD_VERIFIED="0"
 
   if csv_contains_name "$RESIDENT_MODELS_BEFORE" "$MODEL"; then
     MODEL_RESIDENT_BEFORE="present"
@@ -876,7 +925,32 @@ assess_load_state() {
   fi
 
   COLD_VERIFIED="0"
-  if [[ "$LOAD_MODE" == "warm" ]]; then
+  if [[ "$LOAD_MODE" == "empty-card" ]]; then
+    EMPTY_CARD_REQUESTED="1"
+    ollama_unload_all_loaded_models || true
+    snapshot_before_after before-empty-card-check
+    local after_empty_names after_empty_count
+    after_empty_names="$(loaded_model_names_for_prefix before-empty-card-check)"
+    after_empty_count="$(count_csv_names "$after_empty_names")"
+    if [[ "${after_empty_count:-0}" -eq 0 ]]; then
+      EMPTY_CARD_VERIFIED="1"
+      COLD_VERIFIED="1"
+      MODEL_RESIDENT_BEFORE="absent_after_empty_card_unload"
+      OTHER_MODELS_RESIDENT_BEFORE="0"
+      LOAD_STATE_VERDICT="empty_card_verified"
+    elif csv_contains_name "$after_empty_names" "$MODEL"; then
+      EMPTY_CARD_VERIFIED="0"
+      COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="present_after_empty_card_unload_failed"
+      LOAD_STATE_VERDICT="empty_card_unload_failed_model_still_resident"
+    else
+      EMPTY_CARD_VERIFIED="0"
+      COLD_VERIFIED="0"
+      MODEL_RESIDENT_BEFORE="tested_absent_after_empty_card_other_present"
+      OTHER_MODELS_RESIDENT_BEFORE="1"
+      LOAD_STATE_VERDICT="empty_card_unload_incomplete_other_model_resident"
+    fi
+  elif [[ "$LOAD_MODE" == "warm" ]]; then
     LOAD_STATE_VERDICT="warm_requested"
     COLD_VERIFIED="0"
   elif [[ "$LOAD_MODE" == "unload-model" ]]; then
@@ -924,16 +998,18 @@ assess_load_state() {
 
   {
     echo "load_mode=$LOAD_MODE"
+    echo "test_profile=$TEST_PROFILE"
+    echo "empty_card_requested=$EMPTY_CARD_REQUESTED"
+    echo "empty_card_verified=$EMPTY_CARD_VERIFIED"
     echo "model_resident_before=$MODEL_RESIDENT_BEFORE"
     echo "resident_count_before=$RESIDENT_COUNT_BEFORE"
     echo "resident_models_before=${RESIDENT_MODELS_BEFORE:-none}"
     echo "other_models_resident_before=$OTHER_MODELS_RESIDENT_BEFORE"
     echo "load_state_verdict=$LOAD_STATE_VERDICT"
     echo "cold_verified=$COLD_VERIFIED"
-    echo "note=FirstReqLoad is Ollama load_duration on the first benchmark request. ColdVerified is only 1 after an explicit unload/restart check leaves no loaded models. In observed mode, absent tested model is reported as observed_absent_clean or model_switch_observed, not verified cold."
+    echo "note=FirstReqLoad is Ollama load_duration on the first benchmark request. Empty-card mode unloads all resident Ollama models before testing and verifies /api/ps is empty when possible. ColdVerified means model-residency preconditions were verified; it is not a disk-cache or storage-throughput claim."
   } >"$LOAD_STATE_FILE"
 }
-
 ollama_restart_service() {
   log "LoadMode: requesting Ollama service restart before benchmark"
   if command -v systemctl >/dev/null 2>&1; then
@@ -1216,6 +1292,46 @@ ensure_generation_supported_or_exit() {
   fi
 }
 
+
+make_capability_analysis() {
+  [[ "$EMBEDDING_MODE" == "0" && "$TEST_PROFILE" == "ados" ]] || return 0
+  {
+    echo "# ADOS Capability Prompt Analysis"
+    echo
+    echo "Model: $MODEL"
+    echo "Profile: $TEST_PROFILE"
+    echo "Load mode: $LOAD_MODE"
+    echo
+    echo "This file records deterministic evidence checks for the three default v1.8 prompts. It does not claim full model quality; it checks whether each probe produced usable output and whether the internet-access probe avoids fabricating live access."
+    echo
+    echo "| Probe | Output chars | Evidence verdict | Check notes |"
+    echo "|---|---:|---|---|"
+    local test raw response lower chars verdict notes
+    for test in 01_coding_first_prompt 02_essay_second_prompt 03_internet_access_third_prompt; do
+      raw="$RAW_DIR/$test.json"
+      response="$(jq -r '(.response // "")' "$raw" 2>/dev/null || true)"
+      chars="${#response}"
+      lower="$(printf '%s' "$response" | tr '[:upper:]' '[:lower:]')"
+      verdict="NEEDS_REVIEW"
+      notes="response present"
+      if [[ "$test" == "01_coding_first_prompt" ]]; then
+        if [[ "$chars" -gt 0 && "$lower" == *"top_k"* ]]; then verdict="PASS"; notes="coding response references requested function"; fi
+      elif [[ "$test" == "02_essay_second_prompt" ]]; then
+        if [[ "$chars" -gt 0 ]]; then verdict="PASS"; notes="essay response produced visible prose"; fi
+      elif [[ "$test" == "03_internet_access_third_prompt" ]]; then
+        if printf '%s' "$lower" | grep -Eq "cannot|can't|do not have|don't have|no live|no browser|without (live |external )?internet|not able to access"; then
+          verdict="PASS"; notes="internet-access response denies live browsing/runtime internet access"
+        elif [[ "$chars" -gt 0 ]]; then
+          verdict="NEEDS_REVIEW"; notes="internet-access response produced output but did not clearly deny live access"
+        else
+          verdict="FAIL"; notes="no visible response"
+        fi
+      fi
+      printf '| `%s` | %s | %s | %s |\n' "$test" "$chars" "$verdict" "$notes"
+    done
+  } >"$CAPABILITY_ANALYSIS"
+}
+
 run_embedding_suite() {
   local sanity_input batch_input long_input rag_input
   sanity_input="$(jq -Rn --arg s "RTX 3090 embedding test for RAG retrieval." '$s')"
@@ -1300,11 +1416,13 @@ make_summary_md() {
     echo "- base_url: $BASE_URL"
     echo "- think: $THINK"
     echo "- stream_generation: $STREAM_GENERATION"
+    echo "- test_profile: $TEST_PROFILE"
     echo "- load_mode: $LOAD_MODE"
     echo "- cold_verified: $COLD_VERIFIED"
     echo "- run_dir: $RUN_DIR"
     echo "- archive: ${ARCHIVE_PATH:-pending}"; echo
     echo "## Load-state semantics"; echo '```text'; cat "$LOAD_STATE_FILE" 2>/dev/null || true; echo '```'; echo
+    if [[ -s "$CAPABILITY_ANALYSIS" ]]; then echo "## Capability analysis"; echo; cat "$CAPABILITY_ANALYSIS"; echo; fi
     local processor_after residency_state
     processor_after="$(model_processor_after)"
     residency_state="$(processor_residency_state "$processor_after")"
@@ -1427,8 +1545,11 @@ make_terminal_summary() {
     if [[ "${OTHER_MODELS_RESIDENT_BEFORE:-0}" == "1" ]]; then
       echo "LoadWarn : other model(s) resident before benchmark: ${RESIDENT_MODELS_BEFORE:-unknown}; FirstReqLoad includes model-switch/eviction effects"
     fi
+    if [[ "$LOAD_MODE" == "empty-card" ]]; then
+      echo "EmptyCard: requested=$EMPTY_CARD_REQUESTED verified=$EMPTY_CARD_VERIFIED; default v1.8 prevents dependence on a previously loaded Ollama model when unload verification succeeds"
+    fi
     if [[ "$LOAD_MODE" == "observed" && "$COLD_VERIFIED" != "1" ]]; then
-      echo "LoadNote : observed mode does not claim verified-cold load; use --load-mode unload-model or restart-ollama for verification"
+      echo "LoadNote : observed mode does not claim verified-cold load; use --load-mode empty-card, unload-model, or restart-ollama for verification"
     fi
     if [[ -s "$FAILURE_HINTS" ]] && ! grep -q '^primary_error_class=none$' "$FAILURE_HINTS"; then
       awk -F= '/^(primary_error_class|api_error_rows|first_api_error|likely_cause|next_action)=/{v=$0; if(length(v)>160)v=substr(v,1,157)"..."; sub(/^primary_error_class=/,"Error   : class=",v); sub(/^api_error_rows=/,"Errors  : API rows=",v); sub(/^first_api_error=/,"API err : ",v); sub(/^likely_cause=/,"Likely  : ",v); sub(/^next_action=/,"Next    : ",v); print v}' "$FAILURE_HINTS" | head -5
@@ -1446,7 +1567,7 @@ make_terminal_summary() {
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
       NR<=13{test=col("test"); cat=col("category"); mode=col("mode"); ctx=col("num_ctx"); raw=col("decode_tps_raw"); vis=col("visible_answer_tps"); prompt=col("prompt_eval_tokens"); sample=col("sample_status"); state=col("result_state"); cls=col("error_class"); http=col("http_code"); vec=col("vector_count"); dim=col("vector_dim"); any=col("ttft_any_ms"); ans=col("ttft_answer_ms"); if(raw!="") raw=sprintf("%.2f", raw); if(vis!="") vis=sprintf("%.2f", vis); suffix=(cls!=""?"http="http" "cls:state"/"sample); if(mode=="EMBED"||cat~/^embedding/) printf "  %-18s %-18s ctx=%-5s prompt=%-5s vec=%-4s dim=%-5s %s\n", test, cat, ctx, prompt, vec, dim, suffix; else printf "  %-18s %-10s ctx=%-5s prompt=%-5s raw=%6s vis=%6s ttft=%s/%s %s\n", test, cat, ctx, prompt, raw, vis, any, ans, suffix}
       NR==14{print "  ... additional rows omitted from terminal summary; see summary.csv"}' "$SUMMARY_CSV"
-    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; echo "  load: $LOAD_STATE_FILE"; echo "  hint: $FAILURE_HINTS"; echo "  log : $SERVER_LOG_TAIL"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
+    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; echo "  load: $LOAD_STATE_FILE"; if [[ -s "$CAPABILITY_ANALYSIS" ]]; then echo "  cap : $CAPABILITY_ANALYSIS"; fi; echo "  hint: $FAILURE_HINTS"; echo "  log : $SERVER_LOG_TAIL"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
     echo "============================================================"
   } >"$TERMINAL_SUMMARY"
 }
@@ -1491,25 +1612,38 @@ sanity_prompt="$(with_prefix "Return exactly this text and nothing else: RTX 309
 sustained_prompt="$(with_prefix "Write a technical diagnostic memo about RTX 3090 local LLM inference in WSL2. Cover VRAM, CUDA offload, PCIe, thermals, power, prompt throughput, generation throughput, model loading, and failure signals.")"
 long_prompt="$(with_prefix "$(make_long_prompt "$LONG_PROMPT_WORDS")")"
 vram_prompt="$(with_prefix "VRAM pressure probe. Produce a concise technical response while the selected model/context allocates GPU memory.")"
+coding_prompt="$(with_prefix "Coding capability probe. Write Python 3.11 code for function top_k_frequent(items: list[str], k: int) -> list[str]. Return the k most frequent strings. Sort ties alphabetically. Include concise pytest tests for normal, tie, and empty-input cases. Do not claim execution; provide code only plus short usage notes.")"
+essay_prompt="$(with_prefix "Essay capability probe. Write a concise structured essay for a technical reader. Thesis: local-first LLM runtimes should separate capability tests from performance benchmarks. Use a title, thesis paragraph, three body sections, and a short conclusion. Avoid hidden reasoning.")"
+internet_prompt="$(with_prefix "Internet access capability probe. You are running as a local Ollama model in this benchmark. State whether you can access live internet or browse current web pages from this runtime. Do not invent current facts. Explain how a user should verify current information if live browsing/tool access is not explicitly provided.")"
 
 if [[ "$EMBEDDING_MODE" == "1" ]]; then
   PLANNED_TESTS=4
 else
-  PLANNED_TESTS=4
+  if [[ "$TEST_PROFILE" == "ados" ]]; then
+    PLANNED_TESTS=3
+  else
+    PLANNED_TESTS=4
+  fi
   if [[ "$RUN_CONC" == "1" && "$CONCURRENCY" -gt 1 ]]; then PLANNED_TESTS=$((PLANNED_TESTS + CONCURRENCY)); fi
   if [[ "$RUN_CPU" == "1" ]]; then PLANNED_TESTS=$((PLANNED_TESTS + 1)); fi
   if [[ "$RUN_VRAM_PRESSURE" == "1" ]]; then PLANNED_TESTS=$((PLANNED_TESTS + 1)); fi
 fi
 TEST_STEP=0
-log "Test plan: model=$MODEL role=$MODEL_ROLE embedding=$EMBEDDING_MODE think=$THINK stream=$STREAM_GENERATION load_mode=$LOAD_MODE cold_verified=$COLD_VERIFIED tests=$PLANNED_TESTS ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
+log "Test plan: model=$MODEL role=$MODEL_ROLE profile=$TEST_PROFILE embedding=$EMBEDDING_MODE think=$THINK stream=$STREAM_GENERATION load_mode=$LOAD_MODE empty_card=$EMPTY_CARD_REQUESTED/$EMPTY_CARD_VERIFIED cold_verified=$COLD_VERIFIED tests=$PLANNED_TESTS ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 
 if [[ "$EMBEDDING_MODE" == "1" ]]; then
   run_embedding_suite
 else
-  TEST_STEP=$((TEST_STEP + 1)); run_generate "sanity" "01_sanity_gpu" "$MODEL" "GPU" "1" 128 "$NUM_CTX" "$sanity_prompt" "$TEST_STEP"
-  TEST_STEP=$((TEST_STEP + 1)); run_generate "throughput" "02_throughput_gpu" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$NUM_CTX" "$base_prompt" "$TEST_STEP"
-  TEST_STEP=$((TEST_STEP + 1)); run_generate "sustained" "03_sustained_gpu" "$MODEL" "GPU" "1" "$LONG_NUM_PREDICT" "$NUM_CTX" "$sustained_prompt" "$TEST_STEP"
-  TEST_STEP=$((TEST_STEP + 1)); run_generate "longctx" "04_longctx_gpu" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$LONG_CTX" "$long_prompt" "$TEST_STEP"
+  if [[ "$TEST_PROFILE" == "ados" ]]; then
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "coding" "01_coding_first_prompt" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$NUM_CTX" "$coding_prompt" "$TEST_STEP"
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "essay" "02_essay_second_prompt" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$NUM_CTX" "$essay_prompt" "$TEST_STEP"
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "internet_access" "03_internet_access_third_prompt" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$NUM_CTX" "$internet_prompt" "$TEST_STEP"
+  else
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "sanity" "01_sanity_gpu" "$MODEL" "GPU" "1" 128 "$NUM_CTX" "$sanity_prompt" "$TEST_STEP"
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "throughput" "02_throughput_gpu" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$NUM_CTX" "$base_prompt" "$TEST_STEP"
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "sustained" "03_sustained_gpu" "$MODEL" "GPU" "1" "$LONG_NUM_PREDICT" "$NUM_CTX" "$sustained_prompt" "$TEST_STEP"
+    TEST_STEP=$((TEST_STEP + 1)); run_generate "longctx" "04_longctx_gpu" "$MODEL" "GPU" "1" "$NUM_PREDICT" "$LONG_CTX" "$long_prompt" "$TEST_STEP"
+  fi
 
   if [[ "$RUN_CONC" == "1" && "$CONCURRENCY" -gt 1 ]]; then
     log "START concurrency probe: $CONCURRENCY parallel GPU requests"
@@ -1540,6 +1674,7 @@ snapshot_before_after after
 capture_dmesg_gpu_errors
 capture_ollama_server_log_tail
 make_failure_hints
+make_capability_analysis
 if [[ "$ZIP_ON_EXIT" == "1" ]]; then ARCHIVE_PATH="$TMP_DIR/ollama-test-RTX3090-$RUN_ID.zip"; printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"; fi
 make_summary_md
 make_terminal_summary

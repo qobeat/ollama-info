@@ -1,3 +1,15 @@
+# v1.8.0 - empty-card ADOS capability profile and unified wrapper
+
+- Added `scripts/ollama.sh` as the canonical wrapper for `status`, `start`, `stop`, `models`, `gpu`, `logs`, `test`, `bench`, and `embed-test`.
+- Added multi-model command support, for example `ollama test qwen3.6:35b qwen3.6:27b` and `ollama bench qwen3-embedding:4b qwen3.6:27b`.
+- Changed the default generation profile to three ADOS capability prompts: coding, essay, and internet-access boundary behavior.
+- Preserved the v1.7 performance rows under `--profile perf` / `--profile legacy-perf`.
+- Changed default load mode to `empty-card`, which unloads all resident Ollama models before the first request and records `empty_card_requested`, `empty_card_verified`, and `load_state_verdict`.
+- Refactored the bashrc integration to delegate to `ollama.sh` instead of duplicating benchmark/control logic.
+- Converted `ollama-bench-RTX3090.sh` into a compatibility shim to the unified wrapper.
+- Added capability-analysis evidence for the three default prompts.
+- Added v1.8 ADOS plan, review, verification, reflection, self-evaluation, test-results review, and evidence ledger artifacts.
+
 # v1.7.0 - role-aware benchmark routing, latency metrics, load-state semantics, and cleanup
 
 ## v1.7.1 - load-state/offload evidence fix

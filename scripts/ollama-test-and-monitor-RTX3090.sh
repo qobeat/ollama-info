@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.1"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.7.1-loadstate-offload-ttft-fix"
+VERSION="1.8"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.8-empty-card-ados-wrapper"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -43,7 +43,8 @@ CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 EMBEDDING_MODE="${EMBEDDING_MODE:-0}"
 FULL_MODEL_SHOW="${FULL_MODEL_SHOW:-0}"
 STREAM_GENERATION="${STREAM_GENERATION:-1}"
-LOAD_MODE="${LOAD_MODE:-observed}"
+LOAD_MODE="${LOAD_MODE:-empty-card}"
+TEST_PROFILE="${TEST_PROFILE:-ados}"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 MONITOR_ROOT="$RUN_DIR/monitor"
@@ -83,7 +84,7 @@ Model selection:
 Defaults for RTX 3090 baseline:
   Safe single-request baseline: concurrency probe disabled by default.
   monitor-profile=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT
-  long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
+  long_prompt_words=$LONG_PROMPT_WORDS concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU think=$THINK embedding=$EMBEDDING_MODE profile=$TEST_PROFILE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
 
 Core options:
   --model PATTERN           Model name or pattern to resolve locally
@@ -99,8 +100,9 @@ Core options:
   --long-prompt-words N     True long-context prompt size (default: $LONG_PROMPT_WORDS)
   --concurrency N           Test concurrency probe size (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
+  --profile PROFILE         ados|perf|legacy-perf; default ados runs 3 capability prompts
   --stream / --no-stream    Enable/disable streaming TTFT instrumentation (default: stream)
-  --load-mode MODE          observed|warm|unload-model|restart-ollama (default: $LOAD_MODE)
+  --load-mode MODE          empty-card|observed|warm|unload-model|restart-ollama (default: $LOAD_MODE)
   --embedding               Run /api/embed benchmark mode instead of /api/generate
   --full-model-show         Also archive full verbose /api/show output; default stores slim metadata only
   --server-log-lines N      Capture last N Ollama server log lines in test artifacts (default: $SERVER_LOG_LINES)
@@ -136,7 +138,7 @@ Example: $(script_display_cmd) qwen3.6
 Baseline run: $(script_display_cmd) qwen3.6
 Stress run:   $(script_display_cmd) qwen3.6 --stress
 Embed run:    $(script_display_cmd) bge-m3 --embedding
-Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
+Defaults: monitor=$MONITOR_PROFILE interval=${INTERVAL}s ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE profile=$TEST_PROFILE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
 Use -h for full options.
 EOF_SHORT
 }
@@ -191,6 +193,7 @@ while [[ $# -gt 0 ]]; do
     --long-prompt-words) LONG_PROMPT_WORDS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --concurrency) CONCURRENCY="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
+    --profile) TEST_PROFILE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --stream) STREAM_GENERATION=1; shift ;;
     --no-stream) STREAM_GENERATION=0; shift ;;
     --load-mode) LOAD_MODE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
@@ -231,7 +234,8 @@ done
 
 for n in INTERVAL NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT TIMEOUT_SEC CONNECT_TIMEOUT_SEC; do is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }; done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
-case "$LOAD_MODE" in observed|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --load-mode must be observed, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$LOAD_MODE" in empty-card|observed|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --load-mode must be empty-card, observed, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$TEST_PROFILE" in ados|perf|legacy-perf) ;; *) echo "ERROR: --profile must be ados, perf, or legacy-perf" >&2; exit 2 ;; esac
 case "$STREAM_GENERATION" in 0|1) ;; *) echo "ERROR: STREAM_GENERATION must be 0 or 1" >&2; exit 2 ;; esac
 [[ "$INTERVAL" -ge 1 ]] || INTERVAL=1
 [[ "$CONCURRENCY" -ge 1 ]] || CONCURRENCY=1
@@ -398,7 +402,7 @@ make_terminal_summary() {
     echo "Mode    : $model_mode"
     echo "API     : $BASE_URL"
     echo "Status  : test_exit_code=$TEST_RC"
-    echo "TTFT    : stream=$STREAM_GENERATION load_mode=$LOAD_MODE load_state=$load_state_verdict cold_verified=$cold_verified resident_before=$model_resident_before resident_models_before=$resident_models_before"
+    echo "TTFT    : stream=$STREAM_GENERATION profile=$TEST_PROFILE load_mode=$LOAD_MODE load_state=$load_state_verdict cold_verified=$cold_verified resident_before=$model_resident_before resident_models_before=$resident_models_before"
     if [[ "$residency_state" == "full_gpu" ]]; then
       echo "Residency: full GPU ($processor_after)"
     elif [[ "$residency_state" == "unknown" ]]; then
@@ -524,6 +528,7 @@ make_summary() {
     echo "- base_url: $BASE_URL"
     echo "- think: $THINK"
     echo "- stream_generation: $STREAM_GENERATION"
+    echo "- profile: $TEST_PROFILE"
     echo "- load_mode: $LOAD_MODE"
     echo "- embedding_mode: $EMBEDDING_MODE"
     echo "- run_dir: $RUN_DIR"
@@ -591,7 +596,7 @@ select_or_explain_model "$MODEL"
 log "ollama-test-and-monitor-RTX3090.sh v$VERSION"
 log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
-log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE full_model_show=$FULL_MODEL_SHOW ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
+log "Plan: requested_model=${MODEL_PATTERN:-$MODEL} resolved_model=$MODEL think=$THINK embedding=$EMBEDDING_MODE profile=$TEST_PROFILE stream=$STREAM_GENERATION load_mode=$LOAD_MODE full_model_show=$FULL_MODEL_SHOW ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 log "Monitor: interval=${INTERVAL}s profile=$MONITOR_PROFILE"
 log "Capturing NVIDIA start snapshot..."
 capture_nvidia_boundary start || true
@@ -606,7 +611,7 @@ TEST_ARGS=(
   --model "$MODEL" --base-url "$BASE_URL" --out-dir "$TEST_ROOT" --run-id "$RUN_ID-test"
   --num-ctx "$NUM_CTX" --long-ctx "$LONG_CTX" --num-predict "$NUM_PREDICT" --long-num-predict "$LONG_NUM_PREDICT" --long-prompt-words "$LONG_PROMPT_WORDS"
   --concurrency "$CONCURRENCY" --timeout-sec "$TIMEOUT_SEC" --think "$THINK" --soak-minutes "$SOAK_MINUTES" --soak-num-predict "$SOAK_NUM_PREDICT"
-  --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT" --load-mode "$LOAD_MODE"
+  --vram-ctx "$VRAM_CTX" --vram-num-predict "$VRAM_NUM_PREDICT" --load-mode "$LOAD_MODE" --profile "$TEST_PROFILE"
   --no-terminal-summary --no-zip --no-ensure-server --server-log-lines "$SERVER_LOG_LINES"
 )
 [[ "$STREAM_GENERATION" == "1" ]] && TEST_ARGS+=(--stream) || TEST_ARGS+=(--no-stream)

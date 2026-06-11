@@ -1,5 +1,5 @@
-ollama-info v1.7.1 package manifest
-Generated: 2026-06-11T18:04:34Z
+ollama-info v1.8 package manifest
+Generated: 2026-06-11T18:51:59+00:00
 
 PACKAGE-MANIFEST.txt
 README.md
@@ -20,6 +20,7 @@ changelog/REFLECTION-v1.5.md
 changelog/REFLECTION-v1.6.md
 changelog/REFLECTION-v1.7.1.md
 changelog/REFLECTION-v1.7.md
+changelog/REFLECTION-v1.8.md
 changelog/REVIEW-v0.5.md
 changelog/REVIEW-v0.6.md
 changelog/REVIEW-v0.7.md
@@ -34,6 +35,7 @@ changelog/REVIEW-v1.5.md
 changelog/REVIEW-v1.6.md
 changelog/REVIEW-v1.7.1.md
 changelog/REVIEW-v1.7.md
+changelog/REVIEW-v1.8.md
 changelog/VERIFY-v0.7.md
 changelog/VERIFY-v0.8.md
 changelog/VERIFY-v0.9.md
@@ -46,22 +48,30 @@ changelog/VERIFY-v1.5.md
 changelog/VERIFY-v1.6.md
 changelog/VERIFY-v1.7.1.md
 changelog/VERIFY-v1.7.md
+changelog/VERIFY-v1.8.md
 changelog/atomic-requirements-v1.5.txt
 changelog/atomic-requirements-v1.6.txt
 changelog/atomic-requirements-v1.7.1.txt
 changelog/atomic-requirements-v1.7.txt
+changelog/atomic-requirements-v1.8.txt
 changelog/plan-1.5.txt
 changelog/plan-1.6.txt
 changelog/plan-1.7.1.txt
 changelog/plan-1.7.txt
+changelog/plan-1.8.txt
 qa-evidence/QUALITY-EVIDENCE-SUMMARY-v1.7.1.md
+qa-evidence/QUALITY-EVIDENCE-SUMMARY-v1.8.md
 qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
 qa-evidence/ados-apply-verify-schema.json
 qa-evidence/evidence-ledger-v1.7.1.jsonl
+qa-evidence/evidence-ledger-v1.8.jsonl
 qa-evidence/evidence-ledger.jsonl
+qa-evidence/self-evaluation-v1.8.md
+qa-evidence/test-results-review-v1.8.md
 qa-evidence/two-model-performance-and-ados-alignment-v1.7.1.md
 qa-evidence/verification-output-v1.7.1.txt
 qa-evidence/verification-output-v1.7.txt
+qa-evidence/verification-output-v1.8.txt
 scripts/ollama-bench-RTX3090.sh
 scripts/ollama-common.sh
 scripts/ollama-download.sh
@@ -75,3 +85,4 @@ scripts/ollama-status
 scripts/ollama-stop
 scripts/ollama-test-RTX3090.sh
 scripts/ollama-test-and-monitor-RTX3090.sh
+scripts/ollama.sh

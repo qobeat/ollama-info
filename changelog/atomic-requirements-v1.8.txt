@@ -1,0 +1,28 @@
+ollama-info v1.8 atomic requirements
+====================================
+
+AR-001 The package version and script signatures must identify v1.8.
+AR-002 Generation tests must default to --load-mode empty-card.
+AR-003 Empty-card mode must unload all resident Ollama models before the first benchmark request.
+AR-004 Empty-card mode must record empty_card_requested and empty_card_verified in load-state evidence.
+AR-005 ColdVerified must mean verified model-residency preconditions only and must not claim storage-cold behavior.
+AR-006 The default generation profile must run exactly three ADOS prompts: coding, essay, and internet-access boundary.
+AR-007 The coding prompt must request a concrete coding task and tests.
+AR-008 The essay prompt must request structured prose.
+AR-009 The internet-access prompt must test whether the model fabricates live internet access.
+AR-010 The package must preserve legacy v1.7 performance rows behind --profile perf or --profile legacy-perf.
+AR-011 The test summary must include capability rows and capability-analysis evidence for the ADOS profile.
+AR-012 scripts/ollama.sh must support status, start, stop, models, gpu, logs, test, bench, and embed-test.
+AR-013 scripts/ollama.sh test must support multiple model names in one command line.
+AR-014 scripts/ollama.sh bench must auto-route generation and embedding models by role.
+AR-015 scripts/ollama.sh must support --route-only for route verification.
+AR-016 bashrc/.bashrc must delegate command logic to ollama.sh instead of duplicating benchmark logic.
+AR-017 ollama-bench-RTX3090.sh must be a compatibility shim to the unified wrapper.
+AR-018 v1.8 documentation must explain empty-card semantics, ADOS profile, perf profile, and multi-model commands.
+AR-019 QA evidence must include review of the three provided test results.
+AR-020 QA evidence must include ADOS alignment, verification output, self-evaluation, and evidence ledger.
+AR-021 Final package must exclude generated run archives, caches, nested zips, legacy clutter, and pyc files.
+AR-022 Shell scripts must pass bash syntax checks.
+AR-023 Deterministic fake harness must verify route-only multi-model behavior.
+AR-024 Deterministic fake harness must verify empty-card mode and the three prompt payloads.
+AR-025 Final archive and extracted archive must pass package hygiene checks.

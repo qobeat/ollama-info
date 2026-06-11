@@ -1,0 +1,23 @@
+== [ ZIP INFO ] ===
+/mnt/c/Users/kirae/Downloads/fox-dev/ollama-info-v1.8.zip
+
+TIME: 2026-06-11 16:45:30
+
+TOTAL SIZE: 185.4KB (189809 bytes)
+
+CHECKSUM: 0b9e95a2 (md5-8)
+
+== [ UNZIP INFO ] ===
+PID:216202
+
+CMD: /home/alex/.local/bin/unzip-gpt.sh -x ollama
+
+TIME: 2026-06-11 17:28:59 -0400
+
+LOG: /home/alex/tmp/unzip-gpt-rsync.mbTccn.log
+
+TOTAL SIZE: 1.4MB (1519599 bytes)
+
+NUMBER OF FILES: 85
+
+--
