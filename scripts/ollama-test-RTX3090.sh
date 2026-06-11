@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.8"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.8-empty-card-ados-wrapper"
+VERSION="1.9"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.9-compact-multimodel-readme"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -755,6 +755,8 @@ ollama_curl_generate_stream() {
   answer_ms="$(awk -v s="$start_ns" -v n="${answer_ns:-0}" 'BEGIN{if(n>0) printf "%.3f", (n-s)/1000000; else print ""}')"
   jq -n --arg any "$any_ms" --arg thinking "$thinking_ms" --arg answer "$answer_ms" \
     '{ttft_any_ms: (if $any=="" then null else ($any|tonumber) end), ttft_thinking_ms: (if $thinking=="" then null else ($thinking|tonumber) end), ttft_answer_ms: (if $answer=="" then null else ($answer|tonumber) end)}' >"$metrics_file" 2>/dev/null || true
+  # Sidecar timestamp files are implementation scratch; stream-metrics JSON is the durable output.
+  rm -f "$first_any_file" "$first_thinking_file" "$first_answer_file" 2>/dev/null || true
   return "$rc"
 }
 
@@ -1302,7 +1304,7 @@ make_capability_analysis() {
     echo "Profile: $TEST_PROFILE"
     echo "Load mode: $LOAD_MODE"
     echo
-    echo "This file records deterministic evidence checks for the three default v1.8 prompts. It does not claim full model quality; it checks whether each probe produced usable output and whether the internet-access probe avoids fabricating live access."
+    echo "This file records deterministic evidence checks for the three default prompts. It does not claim full model quality; it checks whether each probe produced usable output and whether the internet-access probe avoids fabricating live access."
     echo
     echo "| Probe | Output chars | Evidence verdict | Check notes |"
     echo "|---|---:|---|---|"
@@ -1449,7 +1451,7 @@ make_summary_md() {
         if(sample=="SHORT_SAMPLE") short_samples++;
         if(sample=="UNDERFILLED") underfilled++;
         if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
-        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"){first_ttfa=ttfa; first_ttfans=ttfans}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warmn++; warmsum+=vis; if(ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(ttfans>0){warm_ttfans_n++; warm_ttfans_sum+=ttfans}}; if(cat=="longctx"){long_seen=1; longgen=gen; longvis=vis; longpe=pe; longctx=ctx; longfill=fill; longsample=sample; long_ttfa=ttfa; long_ttfans=ttfans}; if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa}; if(ttfans>0){ttfans_n++; ttfans_sum+=ttfans}; if(e2e500>0){e2e_n++; e2e_sum+=e2e500}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"||cat=="coding"){first_ttfa=ttfa; first_ttfans=ttfans}; iswarm=(cat=="throughput"||cat=="sustained"||cat=="coding"||cat=="essay"||cat=="internet_access"); if(mode=="GPU"&&conc==1&&err==""&&iswarm&&sample=="OK"&&vis>0){warmn++; warmsum+=vis; if(cat!="coding"&&ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(cat!="coding"&&ttfans>0){warm_ttfans_n++; warm_ttfans_sum+=ttfans}}; if(cat=="longctx"){long_seen=1; longgen=gen; longvis=vis; longpe=pe; longctx=ctx; longfill=fill; longsample=sample; long_ttfa=ttfa; long_ttfans=ttfans}; if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa}; if(ttfans>0){ttfans_n++; ttfans_sum+=ttfans}; if(e2e500>0){e2e_n++; e2e_sum+=e2e500}}
       }
       END{
         printf "- status_basis: rows=%d errors=%d unsupported=%d short_samples=%d underfilled=%d visible_rows=%d thinking_only=%d embedding_rows=%d\n", rows, errors, unsupported, short_samples, underfilled, visible, thinkonly, embed_rows;
@@ -1507,7 +1509,7 @@ make_terminal_summary() {
         if(sample=="SHORT_SAMPLE") short_samples++;
         if(sample=="UNDERFILLED") underfilled++;
         if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
-        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"){first_any=any; first_ans=ans}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warm_n++; warm_sum+=vis; if(warm_n==1||vis>warm_max)warm_max=vis; if(warm_n==1||vis<warm_min)warm_min=vis; if(any>0){warm_any_n++; warm_any_sum+=any}; if(ans>0){warm_ans_n++; warm_ans_sum+=ans}}; if(cat=="longctx"){long_seen=1; long_gen=gen; long_vis=vis; long_fill=fill; long_pe=pe; long_ctx=ctx; long_sample=sample; long_any=any; long_ans=ans}; if(any>0){any_n++; any_sum+=any}; if(ans>0){ans_n++; ans_sum+=ans}; if(e2e>0){e2e_n++; e2e_sum+=e2e}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>first_load) first_load=load; if(cat=="sanity"||cat=="coding"){first_any=any; first_ans=ans}; iswarm=(cat=="throughput"||cat=="sustained"||cat=="coding"||cat=="essay"||cat=="internet_access"); if(mode=="GPU"&&conc==1&&err==""&&iswarm&&sample=="OK"&&vis>0){warm_n++; warm_sum+=vis; if(warm_n==1||vis>warm_max)warm_max=vis; if(warm_n==1||vis<warm_min)warm_min=vis; if(cat!="coding"&&any>0){warm_any_n++; warm_any_sum+=any}; if(cat!="coding"&&ans>0){warm_ans_n++; warm_ans_sum+=ans}}; if(cat=="longctx"){long_seen=1; long_gen=gen; long_vis=vis; long_fill=fill; long_pe=pe; long_ctx=ctx; long_sample=sample; long_any=any; long_ans=ans}; if(any>0){any_n++; any_sum+=any}; if(ans>0){ans_n++; ans_sum+=ans}; if(e2e>0){e2e_n++; e2e_sum+=e2e}}
         if(total>max_total)max_total=total
       }
       END{
@@ -1546,7 +1548,7 @@ make_terminal_summary() {
       echo "LoadWarn : other model(s) resident before benchmark: ${RESIDENT_MODELS_BEFORE:-unknown}; FirstReqLoad includes model-switch/eviction effects"
     fi
     if [[ "$LOAD_MODE" == "empty-card" ]]; then
-      echo "EmptyCard: requested=$EMPTY_CARD_REQUESTED verified=$EMPTY_CARD_VERIFIED; default v1.8 prevents dependence on a previously loaded Ollama model when unload verification succeeds"
+      echo "EmptyCard: requested=$EMPTY_CARD_REQUESTED verified=$EMPTY_CARD_VERIFIED; default prevents dependence on a previously loaded Ollama model when unload verification succeeds"
     fi
     if [[ "$LOAD_MODE" == "observed" && "$COLD_VERIFIED" != "1" ]]; then
       echo "LoadNote : observed mode does not claim verified-cold load; use --load-mode empty-card, unload-model, or restart-ollama for verification"
@@ -1677,7 +1679,11 @@ make_failure_hints
 make_capability_analysis
 if [[ "$ZIP_ON_EXIT" == "1" ]]; then ARCHIVE_PATH="$TMP_DIR/ollama-test-RTX3090-$RUN_ID.zip"; printf '%s\n' "$ARCHIVE_PATH" >"$RUN_DIR/archive.path"; fi
 make_summary_md
-make_terminal_summary
+if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then
+  make_terminal_summary
+else
+  rm -f "$TERMINAL_SUMMARY" 2>/dev/null || true
+fi
 make_archive
 
 if [[ "$PRINT_TERMINAL_SUMMARY" == "1" ]]; then print_file_plain "$TERMINAL_SUMMARY"; else log "Test collector completed; artifacts are under $RUN_DIR"; fi

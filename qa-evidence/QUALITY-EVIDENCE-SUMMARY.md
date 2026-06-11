@@ -1,24 +1,44 @@
-# ollama-info v1.7 quality evidence summary
+# Quality Evidence Summary
 
-This directory contains the ADOS apply/verify evidence used for the v1.7 package.
-
-Files:
+## Evidence files
 
 ```text
-ados-apply-verify-schema.json   schema copied from the uploaded ADOS v5.2.0 package
-evidence-ledger.jsonl           single normative ADOS evidence ledger
-verification-output-v1.7.txt    raw command-output summary from final sandbox verification
+qa-evidence/evidence-ledger.jsonl
+qa-evidence/verification-output.txt
+qa-evidence/test-results-review.md
+qa-evidence/self-evaluation.md
+qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
+changelog/plan-1.9.txt
+changelog/atomic-requirements-v1.9.txt
+changelog/REVIEW-v1.9.md
+changelog/VERIFY-v1.9.md
+changelog/REFLECTION-v1.9.md
 ```
 
-Verification covered:
+## Implementation checks
 
-- Bash syntax checks for all package shell files.
-- `ollama bench --route-only` generation and embedding routing.
-- strict embedding-only generation refusal with `UNSUPPORTED`, exit code 2, API rows 0, and tag-preserving next action.
-- streaming generation with TTFT fields and `FirstReqLoad` summary.
-- embedding benchmark with four `/api/embed` rows.
-- package hygiene precheck for legacy/generated/cache artifacts.
-- evidence-ledger schema validation.
-- final archive hygiene and checksum production.
+```text
+PASS shell syntax checks
+PASS multi-model route-only test wrapper
+PASS role-aware multi-model bench route-only wrapper
+PASS deterministic fake aggregate multi-model run
+PASS aggregate archive contains all sub-runs
+PASS README no release-specific wording
+PASS README command coverage
+PASS ADOS capability visible-summary logic patched
+PASS thinking-only rows excluded from visible-answer speed
+PASS streaming timestamp sidecar cleanup patch present
+PASS duplicate nested test terminal summary avoided when disabled
+PASS orchestrator Markdown avoids duplicating full terminal summary
+PASS evidence ledger JSONL parse
+PASS package hygiene precheck
+PASS extracted archive validation
+```
 
-Limit: sandbox verification validates behavior and packaging, not live RTX 3090 performance.
+## Review result
+
+The implementation repairs the serious v1.8 issues found in the supplied results: fragmented multi-model ZIP output and incorrect ADOS-profile visible-throughput reporting. It also improves documentation and package/runtime compaction without removing raw API and telemetry evidence needed for auditability.
+
+## Limitation
+
+Verification uses deterministic fake Ollama/NVIDIA shims inside the sandbox for behavior checks. The model-performance interpretation is based on the user's supplied live RTX 3090 archives.

@@ -1,88 +1,35 @@
-ollama-info v1.8 package manifest
-Generated: 2026-06-11T18:51:59+00:00
+ollama-info v1.9 package manifest
 
-PACKAGE-MANIFEST.txt
-README.md
-bashrc/.bashrc
-bashrc/README.md
-changelog/CHANGELOG.md
-changelog/REFLECTION-v0.5.md
-changelog/REFLECTION-v0.6.md
-changelog/REFLECTION-v0.7.md
-changelog/REFLECTION-v0.8.md
-changelog/REFLECTION-v0.9.md
-changelog/REFLECTION-v1.0.md
-changelog/REFLECTION-v1.1.md
-changelog/REFLECTION-v1.2.md
-changelog/REFLECTION-v1.3.md
-changelog/REFLECTION-v1.4.md
-changelog/REFLECTION-v1.5.md
-changelog/REFLECTION-v1.6.md
-changelog/REFLECTION-v1.7.1.md
-changelog/REFLECTION-v1.7.md
-changelog/REFLECTION-v1.8.md
-changelog/REVIEW-v0.5.md
-changelog/REVIEW-v0.6.md
-changelog/REVIEW-v0.7.md
-changelog/REVIEW-v0.8.md
-changelog/REVIEW-v0.9.md
-changelog/REVIEW-v1.0.md
-changelog/REVIEW-v1.1.md
-changelog/REVIEW-v1.2.md
-changelog/REVIEW-v1.3.md
-changelog/REVIEW-v1.4.md
-changelog/REVIEW-v1.5.md
-changelog/REVIEW-v1.6.md
-changelog/REVIEW-v1.7.1.md
-changelog/REVIEW-v1.7.md
-changelog/REVIEW-v1.8.md
-changelog/VERIFY-v0.7.md
-changelog/VERIFY-v0.8.md
-changelog/VERIFY-v0.9.md
-changelog/VERIFY-v1.0.md
-changelog/VERIFY-v1.1.md
-changelog/VERIFY-v1.2.md
-changelog/VERIFY-v1.3.md
-changelog/VERIFY-v1.4.md
-changelog/VERIFY-v1.5.md
-changelog/VERIFY-v1.6.md
-changelog/VERIFY-v1.7.1.md
-changelog/VERIFY-v1.7.md
-changelog/VERIFY-v1.8.md
-changelog/atomic-requirements-v1.5.txt
-changelog/atomic-requirements-v1.6.txt
-changelog/atomic-requirements-v1.7.1.txt
-changelog/atomic-requirements-v1.7.txt
-changelog/atomic-requirements-v1.8.txt
-changelog/plan-1.5.txt
-changelog/plan-1.6.txt
-changelog/plan-1.7.1.txt
-changelog/plan-1.7.txt
-changelog/plan-1.8.txt
-qa-evidence/QUALITY-EVIDENCE-SUMMARY-v1.7.1.md
-qa-evidence/QUALITY-EVIDENCE-SUMMARY-v1.8.md
-qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
-qa-evidence/ados-apply-verify-schema.json
-qa-evidence/evidence-ledger-v1.7.1.jsonl
-qa-evidence/evidence-ledger-v1.8.jsonl
-qa-evidence/evidence-ledger.jsonl
-qa-evidence/self-evaluation-v1.8.md
-qa-evidence/test-results-review-v1.8.md
-qa-evidence/two-model-performance-and-ados-alignment-v1.7.1.md
-qa-evidence/verification-output-v1.7.1.txt
-qa-evidence/verification-output-v1.7.txt
-qa-evidence/verification-output-v1.8.txt
-scripts/ollama-bench-RTX3090.sh
-scripts/ollama-common.sh
-scripts/ollama-download.sh
-scripts/ollama-embed-test-RTX3090.sh
-scripts/ollama-gen
-scripts/ollama-monitor.sh
-scripts/ollama-perf
-scripts/ollama-perf-table
-scripts/ollama-start
-scripts/ollama-status
-scripts/ollama-stop
-scripts/ollama-test-RTX3090.sh
-scripts/ollama-test-and-monitor-RTX3090.sh
-scripts/ollama.sh
+Package contents are source scripts, Bash integration, changelog, and current QA evidence. Runtime benchmark archives, run directories, caches, nested zips, and scratch files are excluded from the source package boundary.
+
+Files:
+- PACKAGE-MANIFEST.txt
+- README.md
+- bashrc/.bashrc
+- bashrc/README.md
+- changelog/CHANGELOG.md
+- changelog/REFLECTION-v1.9.md
+- changelog/REVIEW-v1.9.md
+- changelog/VERIFY-v1.9.md
+- changelog/atomic-requirements-v1.9.txt
+- changelog/plan-1.9.txt
+- qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
+- qa-evidence/ados-apply-verify-schema.json
+- qa-evidence/evidence-ledger.jsonl
+- qa-evidence/self-evaluation.md
+- qa-evidence/test-results-review.md
+- qa-evidence/verification-output.txt
+- scripts/ollama-bench-RTX3090.sh
+- scripts/ollama-common.sh
+- scripts/ollama-download.sh
+- scripts/ollama-embed-test-RTX3090.sh
+- scripts/ollama-gen
+- scripts/ollama-monitor.sh
+- scripts/ollama-perf
+- scripts/ollama-perf-table
+- scripts/ollama-start
+- scripts/ollama-status
+- scripts/ollama-stop
+- scripts/ollama-test-RTX3090.sh
+- scripts/ollama-test-and-monitor-RTX3090.sh
+- scripts/ollama.sh

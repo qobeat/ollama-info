@@ -1,0 +1,70 @@
+ollama-info v1.9 verification
+timestamp=2026-06-11T22:13:22+00:00
+
+## Syntax checks
+PASS bash -n scripts/ollama-bench-RTX3090.sh
+PASS bash -n scripts/ollama-common.sh
+PASS bash -n scripts/ollama-download.sh
+PASS bash -n scripts/ollama-embed-test-RTX3090.sh
+PASS bash -n scripts/ollama-monitor.sh
+PASS bash -n scripts/ollama-test-RTX3090.sh
+PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama.sh
+PASS bash -n scripts/ollama-test-RTX3090.sh
+PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama-common.sh
+PASS bash -n bashrc/.bashrc
+
+## Route-only checks
+ROUTE_TEST: 2026-06-11T22:11:19+00:00 ollama test aggregate[1/2] model=qwen2.5-coder:7b role=generate run_id=20260611-221118-multi-1-qwen2.5-coder_7b
+ROUTE_TEST: route=generate model=qwen2.5-coder:7b command=/mnt/data/work_v19/pkg/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model qwen2.5-coder:7b --out-dir /home/oai/log/ollama-test-and-monitor-RTX3090/run-20260611-221118-multi/runs --run-id 20260611-221118-multi-1-qwen2.5-coder_7b --no-zip
+ROUTE_TEST: 2026-06-11T22:11:19+00:00 ollama test aggregate[2/2] model=qwen3:8b role=generate run_id=20260611-221118-multi-2-qwen3_8b
+ROUTE_TEST: route=generate model=qwen3:8b command=/mnt/data/work_v19/pkg/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model qwen3:8b --out-dir /home/oai/log/ollama-test-and-monitor-RTX3090/run-20260611-221118-multi/runs --run-id 20260611-221118-multi-2-qwen3_8b --no-zip
+ROUTE_BENCH: 2026-06-11T22:11:19+00:00 ollama bench aggregate[1/2] model=qwen3-embedding:4b role=embedding run_id=20260611-221119-multi-1-qwen3-embedding_4b
+ROUTE_BENCH: route=embedding model=qwen3-embedding:4b command=/mnt/data/work_v19/pkg/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model qwen3-embedding:4b --out-dir /home/oai/log/ollama-test-and-monitor-RTX3090/run-20260611-221119-multi/runs --run-id 20260611-221119-multi-1-qwen3-embedding_4b --no-zip --embedding
+ROUTE_BENCH: 2026-06-11T22:11:19+00:00 ollama bench aggregate[2/2] model=qwen2.5-coder:7b role=generate run_id=20260611-221119-multi-2-qwen2.5-coder_7b
+ROUTE_BENCH: route=generate model=qwen2.5-coder:7b command=/mnt/data/work_v19/pkg/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model qwen2.5-coder:7b --out-dir /home/oai/log/ollama-test-and-monitor-RTX3090/run-20260611-221119-multi/runs --run-id 20260611-221119-multi-2-qwen2.5-coder_7b --no-zip
+PASS route-only test includes qwen2.5-coder:7b generate
+PASS route-only test includes qwen3:8b generate
+PASS route-only bench includes qwen3-embedding:4b embedding
+PASS route-only bench includes qwen2.5-coder:7b generate
+
+## Aggregate ZIP fake-harness check
+AGG: 2026-06-11T22:11:30+00:00 ollama test aggregate[1/2] model=qwen2.5-coder:7b role=generate run_id=aggregate-test-1-qwen2.5-coder_7b
+AGG: 2026-06-11T22:11:30+00:00 ollama test aggregate[2/2] model=qwen3:8b role=generate run_id=aggregate-test-2-qwen3_8b
+AGG: 2026-06-11T22:11:30+00:00 Multi-model archive: /mnt/data/work_v19/faketmp/ollama-test-and-monitor-RTX3090-aggregate-test.zip
+AGG: 2026-06-11T22:11:30+00:00 Multi-model summary: /mnt/data/work_v19/fakeruns/run-aggregate-test/multi-model-summary.md
+PASS aggregate zip exists
+PASS aggregate summary in zip
+PASS first model sub-run in zip
+PASS second model sub-run in zip
+
+## README checks
+PASS README no release-version wording
+PASS README covers ollama status
+PASS README covers ollama start
+PASS README covers ollama stop
+PASS README covers ollama models
+PASS README covers ollama gpu
+PASS README covers ollama logs
+PASS README covers ollama test
+PASS README covers ollama bench
+PASS README covers ollama embed-test
+PASS README covers How to interpret
+PASS README covers When to use
+
+## Source logic checks
+PASS orchestrator includes ADOS capability categories in visible summary
+PASS orchestrator requires visible output for visible speed
+PASS streaming timestamp sidecars removed after metrics JSON
+PASS orchestrator summary avoids full terminal summary duplication
+
+## Evidence ledger parse
+PASS evidence ledger JSONL rows=23
+
+## Package hygiene precheck
+PASS no nested zips/cache/run/legacy debris
+PASS extracted release archive shell syntax checks
+PASS extracted release archive README release-version wording check
+PASS extracted release archive evidence ledger JSONL parse
+PASS extracted release archive has no nested ZIP files

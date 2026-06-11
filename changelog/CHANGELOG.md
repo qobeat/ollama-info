@@ -1,3 +1,14 @@
+# v1.9.0 - compact multi-model output and authoritative README
+
+- Reviewed six supplied monitored RTX 3090 result archives covering `qwen3.6:35b`, `qwen3.6:27b`, `gpt-oss:20b`, `qwen3:8b`, `qwen2.5-coder:7b`, and `gemma4:31b`.
+- Fixed ADOS capability summaries so valid coding, essay, and internet-access rows contribute to visible-answer reporting instead of printing `no valid visible-answer throughput rows`.
+- Added aggregate multi-model execution in `scripts/ollama.sh`; multi-model `test`, `bench`, and `embed-test` runs now place all model sub-runs in one run directory and one ZIP archive by default.
+- Removed duplicate per-row streaming timestamp sidecar files from durable output; `*.stream-metrics.json` remains the durable TTFT metrics artifact.
+- Avoided nested test terminal-summary files when the orchestrator runs the direct test script with `--no-terminal-summary`.
+- Reduced Markdown duplication by keeping `terminal-summary.txt` as the compact human surface instead of embedding the same full block inside `orchestrator-summary.md`.
+- Rewrote README as the authoritative operating guide without release-specific wording; it explains each wrapper command, result fields, interpretation rules, and use cases.
+- Compacted package evidence surfaces by retaining one current evidence ledger and stable QA report filenames instead of duplicate version-specific QA copies.
+
 # v1.8.0 - empty-card ADOS capability profile and unified wrapper
 
 - Added `scripts/ollama.sh` as the canonical wrapper for `status`, `start`, `stop`, `models`, `gpu`, `logs`, `test`, `bench`, and `embed-test`.

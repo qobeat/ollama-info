@@ -21,7 +21,7 @@ alias crs='cursor .'; alias uz=unzip-gpt.sh
 if ! shopt -oq posix; then [ -f /usr/share/bash-completion/bash_completion ] && . /usr/share/bash-completion/bash_completion; [ -f /etc/bash_completion ] && . /etc/bash_completion; fi
 
 # Keep Ollama SERVER tuning in systemd overrides. This file only adds client helpers.
-# v1.8: command logic lives in ollama-info/scripts/ollama.sh to avoid bashrc/script duplication.
+# Command logic lives in ollama-info/scripts/ollama.sh to avoid bashrc/script duplication.
 for __p in "$HOME/dev/ollama-info/scripts" "$HOME/dev/ollama-info" "$HOME/bin"; do
   if [ -d "$__p" ]; then case ":$PATH:" in *":$__p:"*) ;; *) PATH="$__p:$PATH" ;; esac; fi
 done

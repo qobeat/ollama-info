@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.8"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.8-empty-card-ados-wrapper"
+VERSION="1.9"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.9-compact-multimodel-readme"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -433,7 +433,7 @@ make_terminal_summary() {
           if(mode=="EMBED" || endpoint=="/api/embed" || cat ~ /^embedding/) {
             embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(state=="PASS") embed_ok++; if(cat=="embedding_longctx"){elong_seen=1; elong_state=state; elong_sample=sample; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}
           } else {
-            gen_rows++; if(resp>0) answer_rows++; if(resp==0&&think>0) thinkonly++; if(load>firstload) firstload=load; if((visible>0||raw>0||legacy>0) && state=="PASS" && sample=="OK" && mode=="GPU" && col("concurrency")=="1" && (cat=="throughput"||cat=="sustained")){g=(visible>0?visible:(raw>0?raw:legacy)); warmn++; warmsum+=g; wmin=minnz(wmin,g); if(g>wmax)wmax=g; if(ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(ttftans>0){warm_ttfans_n++; warm_ttfans_sum+=ttftans}}; if(cat=="longctx"){long_seen=1; long_state=state; long_sample=sample; longgen=(visible>0?visible:(raw>0?raw:legacy)); longpe=pe; longctx=ctx; longfill=fill; long_ttfa=ttfa; long_ttfans=ttftans}}
+            gen_rows++; if(resp>0) answer_rows++; if(resp==0&&think>0) thinkonly++; if(load>firstload) firstload=load; if(cat=="sanity"||cat=="coding"){first_ttfa=ttfa; first_ttfans=ttftans}; iswarm=(cat=="throughput"||cat=="sustained"||cat=="coding"||cat=="essay"||cat=="internet_access"); if(visible>0 && state=="PASS" && sample=="OK" && mode=="GPU" && col("concurrency")=="1" && iswarm){g=visible; warmn++; warmsum+=g; wmin=minnz(wmin,g); if(g>wmax)wmax=g; if(cat!="coding"&&ttfa>0){warm_ttfa_n++; warm_ttfa_sum+=ttfa}; if(cat!="coding"&&ttftans>0){warm_ttfans_n++; warm_ttfans_sum+=ttftans}}; if(cat=="longctx"){long_seen=1; long_state=state; long_sample=sample; longgen=(visible>0?visible:(raw>0?raw:legacy)); longpe=pe; longctx=ctx; longfill=fill; long_ttfa=ttfa; long_ttfans=ttftans}}
         }
         END{
           overall="PASS"; if(unsupported>0 && rows==unsupported) overall="UNSUPPORTED"; else if(errors>0) overall="FAIL"; else if(short_samples>0||underfilled>0||thinkonly>0) overall="PASS_WITH_WARNINGS";
@@ -534,7 +534,11 @@ make_summary() {
     echo "- run_dir: $RUN_DIR"
     echo "- test_exit_code: $TEST_RC"
     echo "- combined_archive: ${ARCHIVE_PATH:-pending}"; echo
-    echo "## Compact terminal summary"; echo '```text'; if [[ -s "$TERMINAL_SUMMARY" ]]; then cat "$TERMINAL_SUMMARY"; else echo "terminal summary not generated"; fi; echo '```'; echo
+    echo "## Compact terminal summary"
+    echo
+    echo "- terminal_summary: $TERMINAL_SUMMARY"
+    echo "- note: terminal-summary.txt is kept as the compact human-readable summary; this Markdown file does not duplicate its full contents."
+    echo
     echo "## Detailed component files"
     echo "- test summary: ${test_summary:-not found}"
     echo "- failure hints: ${hint_file:-not found}"
