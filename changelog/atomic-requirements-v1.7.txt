@@ -1,0 +1,144 @@
+ollama-info v1.7 atomic requirements and status
+===============================================
+
+Status legend: COMPLETE, PARTIAL, DEFERRED, NOT_APPLICABLE
+
+AR-1  Use v1.6 as base.
+      Status: COMPLETE.
+      Evidence: package was copied from the v1.6 archive and patched in place.
+
+AR-2  Add explicit result taxonomy with UNSUPPORTED distinct from FAIL.
+      Status: COMPLETE.
+      Evidence: summary.csv includes result_state; embedding-only generation preflight records result_state=UNSUPPORTED.
+
+AR-3  Strict generation must refuse embedding-only models without running doomed /api/generate rows.
+      Status: COMPLETE.
+      Evidence: ollama-test-RTX3090.sh exits 2 for embedding role in generation mode and writes one preflight evidence row.
+
+AR-4  Unsupported generation suggestion must preserve the full model tag.
+      Status: COMPLETE.
+      Evidence: next_action uses the resolved MODEL value, e.g. qwen3-embedding:4b.
+
+AR-5  API error counts must not include successful capability preflight rows.
+      Status: COMPLETE.
+      Evidence: failure-hints logic excludes unsupported_generate_for_embedding_model rows from API error counts.
+
+AR-6  Add role-aware auto-router command ollama bench MODEL.
+      Status: COMPLETE.
+      Evidence: scripts/ollama-bench-RTX3090.sh and bashrc wrapper route by /api/show role.
+
+AR-7  Generation-capable models must route to generation benchmark through ollama bench.
+      Status: COMPLETE.
+      Evidence: fake harness validation routed fakegen:1b to generation mode.
+
+AR-8  Embedding-only models must route to embedding benchmark through ollama bench.
+      Status: COMPLETE.
+      Evidence: fake harness validation routed qwen3-embedding:4b to embedding mode.
+
+AR-9  Implement first-class /api/embed benchmark mode.
+      Status: COMPLETE.
+      Evidence: embedding suite posts to /api/embed and records endpoint=/api/embed.
+
+AR-10 Embedding suite must include sanity, batch, long-context, and RAG-profile rows.
+      Status: COMPLETE.
+      Evidence: run_embedding_suite defines 01_embed_sanity, 02_embed_batch, 03_embed_longctx, and 04_embed_rag_profile.
+
+AR-11 Embedding metrics must include vector_count and vector_dim.
+      Status: COMPLETE.
+      Evidence: append_embedding_summary_from_json writes vector_count and vector_dim.
+
+AR-12 Embedding metrics must include embeddings/sec and token throughput when Ollama returns durations/tokens.
+      Status: COMPLETE.
+      Evidence: summary.csv includes embedding_tps and prompt_tps for embedding rows.
+
+AR-13 Rename misleading Cold reporting to FirstReqLoad.
+      Status: COMPLETE.
+      Evidence: terminal summaries and summary.md use FirstReqLoad.
+
+AR-14 Add load-state modes observed, warm, unload-model, and restart-ollama.
+      Status: COMPLETE.
+      Evidence: parser and assess_load_state implement --load-mode observed|warm|unload-model|restart-ollama.
+
+AR-15 Record load-state evidence.
+      Status: COMPLETE.
+      Evidence: load-state.txt records requested mode, pre-run residency, unload/restart attempts, and ColdVerified status.
+
+AR-16 Do not infer disk throughput from Ollama load_duration.
+      Status: COMPLETE.
+      Evidence: README and summaries describe FirstReqLoad as Ollama load_duration on the first request.
+
+AR-17 Stream generation requests by default.
+      Status: COMPLETE.
+      Evidence: STREAM_GENERATION defaults to 1; payload stream flag follows --stream/--no-stream.
+
+AR-18 Record TTFT fields.
+      Status: COMPLETE.
+      Evidence: summary.csv includes ttft_any_ms, ttft_thinking_ms, and ttft_answer_ms.
+
+AR-19 Record 100-token and 500-token latency fields when observable.
+      Status: COMPLETE.
+      Evidence: summary.csv includes time_to_100_tokens_ms and end_to_end_500_ms.
+
+AR-20 Separate raw decode throughput from visible answer throughput.
+      Status: COMPLETE.
+      Evidence: summary.csv includes decode_tps_raw, visible_answer_tps, and thinking_only.
+
+AR-21 Mark short throughput samples.
+      Status: COMPLETE.
+      Evidence: decode512 rows below 384 tokens and decode1024 rows below 900 tokens are sample_status=SHORT_SAMPLE.
+
+AR-22 Mark underfilled long-context rows.
+      Status: COMPLETE.
+      Evidence: long-context rows below 65% fill or below 256 eval tokens are sample_status=UNDERFILLED or SHORT_SAMPLE.
+
+AR-23 Extract context length dynamically from architecture-specific model_info keys.
+      Status: COMPLETE.
+      Evidence: ollama_model_show_slim scans architecture.context_length and other *.context_length keys.
+
+AR-24 Extract embedding length dynamically from architecture-specific model_info keys.
+      Status: COMPLETE.
+      Evidence: ollama_model_show_slim scans architecture.embedding_length and other *.embedding_length keys.
+
+AR-25 Capture richer environment diagnostics.
+      Status: COMPLETE.
+      Evidence: WSL diagnostics include df -T, du -sh ~/.ollama/models, mount filters, lsblk, /proc/version, and nvidia-smi -q sections.
+
+AR-26 Calibrate GPU temperature warning thresholds.
+      Status: COMPLETE.
+      Evidence: monitor uses warn/critical levels including critical >90C.
+
+AR-27 Treat memory junction N/A as unknown, not pass/fail.
+      Status: COMPLETE.
+      Evidence: monitor/report wording reports unavailable memory telemetry as unknown.
+
+AR-28 Distinguish software power-cap from hardware slowdown.
+      Status: COMPLETE.
+      Evidence: monitor and orchestrator summaries report sw_power_cap severity separately from hw_slowdown.
+
+AR-29 Warn for high VRAM occupancy at >92% and critical risk at >97%.
+      Status: COMPLETE.
+      Evidence: monitor implements VRAM_WARN_PCT and VRAM_CRIT_PCT.
+
+AR-30 Warn for PCIe Gen3 x8 without declaring resident decode invalid.
+      Status: COMPLETE.
+      Evidence: monitor and README classify PCIe as load/offload/concurrency warning.
+
+AR-31 Add package cleanup of unused/generated/legacy files.
+      Status: COMPLETE.
+      Evidence: scripts/legacy removed; obsolete plan.txt removed; package hygiene verification excludes run dirs, zip debris, cache files, pyc files, and legacy directories.
+
+AR-32 Remove dependencies on deleted legacy files.
+      Status: COMPLETE.
+      Evidence: ollama-perf-table now uses a shell quick-summary table instead of legacy Python calculators.
+
+AR-33 Include ADOS evidence ledger.
+      Status: COMPLETE.
+      Evidence: qa-evidence/evidence-ledger.jsonl included.
+
+AR-34 Validate ADOS evidence ledger against uploaded v5.2.0 schema.
+      Status: COMPLETE.
+      Evidence: VERIFY-v1.7.md records schema-validation command and PASS result.
+
+AR-35 Package v1.7 release archive and checksum.
+      Status: COMPLETE.
+      Evidence: final packaging step produces ollama-info-v1.7.zip and SHA256 checksum file.

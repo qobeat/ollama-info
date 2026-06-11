@@ -1,0 +1,85 @@
+ollama-info v1.7 implementation plan
+====================================
+
+Source baseline
+---------------
+Use ollama-info v1.6 as the implementation base. Preserve the v1.6 production shell architecture while applying the copied v1.7 benchmark plan and the additional cleanup requirement.
+
+ADOS apply/verify constraint
+----------------------------
+Use the ados-apply-verify-v5.2.0 flow:
+
+1. Convert the user request into explicit requirements and atomic requirements.
+2. Apply changes against the v1.6 package, not against generated run artifacts.
+3. Verify behavior before packaging.
+4. Store quality evidence in one normative ADOS evidence ledger.
+5. Validate the evidence ledger against the provided schema.
+6. Package only source, documentation, manifest, and evidence artifacts.
+
+Implementation scope
+--------------------
+
+1. Result taxonomy and command behavior
+   - Add explicit PASS, PASS_WITH_WARNINGS, FAIL, UNSUPPORTED, INCONCLUSIVE, and SKIPPED semantics where applicable.
+   - Make strict generation tests refuse embedding-only models as UNSUPPORTED, not generic FAIL.
+   - Preserve the full model tag in next-action suggestions.
+   - Add a role-aware auto-routing command: ollama bench MODEL.
+
+2. Embedding benchmark
+   - Use Ollama /api/embed, not /api/generate and not /api/embeddings.
+   - Implement sanity, batch, long-context, and RAG-profile embedding rows.
+   - Record vector count, vector dimension, prompt tokens, duration, embedding tokens/sec, and embeddings/sec.
+
+3. Load-state semantics
+   - Rename misleading Cold reporting to FirstReqLoad.
+   - Add --load-mode observed|warm|unload-model|restart-ollama.
+   - Record model residency and unload/restart evidence in load-state.txt.
+   - Do not infer disk throughput from Ollama load_duration.
+
+4. Streaming TTFT and latency
+   - Stream generation requests by default.
+   - Timestamp first JSON chunk, first thinking chunk, first answer chunk, 100-token threshold, 500-token threshold, and final chunk.
+   - Record TTFT and end-to-end latency fields in summary.csv and summaries.
+
+5. Stable sample thresholds
+   - Mark early-ending decode rows SHORT_SAMPLE.
+   - Mark insufficient long-context rows UNDERFILLED.
+   - Exclude unsupported rows from normal API failure counting.
+
+6. Agentic/concurrency readiness
+   - Preserve explicit concurrency/stress paths.
+   - Add summary fields needed to reason about local agentic workloads.
+   - Keep concurrency out of the safe default baseline.
+
+7. Dynamic model metadata
+   - Extract architecture-specific context and embedding lengths dynamically from model_info.
+   - Handle non-llama metadata keys such as gptoss.context_length, qwen35.context_length, qwen35moe.context_length, and other matching keys.
+
+8. Hardware/environment diagnostics
+   - Calibrate warning severity for GPU temp, VRAM, PCIe, power-cap, and hardware slowdown.
+   - Treat memory junction temperature unavailable as unknown rather than pass/fail evidence.
+   - Capture filesystem, mount, lsblk, WSL/kernel, and broader nvidia-smi -q diagnostics.
+
+9. Ranking/readout schema foundations
+   - Separate raw decode throughput from visible answer throughput.
+   - Surface TTFT, prompt-eval, load-state, and sample-quality fields so rankings can distinguish IDE, RAG/agentic, and model-switching use cases.
+
+10. Cleanup requirement added by user
+   - Remove unused generated files from the package boundary.
+   - Remove legacy Python calculators and stale legacy directories.
+   - Remove obsolete changelog placeholders.
+   - Remove or replace dependencies on deleted legacy files.
+   - Verify the final archive does not include run directories, zip debris, cache files, or legacy directories.
+
+Acceptance conditions
+---------------------
+
+A. ollama test qwen3-embedding:4b reports UNSUPPORTED, exits 2, preserves :4b in next action, and reports zero API error rows.
+B. ollama bench qwen3-embedding:4b auto-routes to embedding mode and runs four /api/embed rows.
+C. ollama bench generation-model auto-routes to generation mode.
+D. Streaming generation rows include TTFT fields and visible-answer throughput fields.
+E. FirstReqLoad replaces Cold in final summaries.
+F. Dynamic metadata extraction fills context and embedding length when architecture-specific keys exist.
+G. Hardware summaries distinguish software power-cap from hardware slowdown and report memory-junction N/A as unknown.
+H. Package hygiene checks show no legacy directory, no generated run artifacts, no nested release zip, and no cache files.
+I. ADOS evidence ledger validates against the v5.2.0 schema.

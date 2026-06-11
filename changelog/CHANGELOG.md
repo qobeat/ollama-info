@@ -1,13 +1,16 @@
-# v1.7.0 - role-aware bench routing, latency metrics, and calibrated RTX 3090 diagnostics
+# v1.7.0 - role-aware benchmark routing, latency metrics, load-state semantics, and cleanup
 
-- Added `ollama bench MODEL`, backed by `scripts/ollama-bench-RTX3090.sh`, to auto-detect model role and route generation-capable models to `/api/generate` benchmarks and embedding-only models to `/api/embed`.
-- Kept `ollama test MODEL` strict generation-only. Embedding-only models now report `UNSUPPORTED` for generation, preserve the full model tag in the suggested `ollama embed-test MODEL:TAG` command, and exit with code 2.
-- Renamed the terminal "Cold" summary wording to `FirstReqLoad` so Ollama `load_duration` is not misrepresented as verified disk-cold timing. Added `--cold-mode verified` precondition tracking.
-- Switched generation rows to streaming `/api/generate` instrumentation and added `ttft_any_ms`, `ttft_thinking_ms`, `ttft_answer_ms`, `end_to_end_500_ms`, `decode_tps_raw`, `visible_answer_tps`, and `thinking_only` fields to `summary.csv`.
-- Added `SHORT_SAMPLE` marking for unstable output-length rows so early-stopped throughput/sustained/long-context samples are not treated as clean ranking rows.
-- Expanded `/api/embed` coverage with batch-32 and RAG-profile rows, plus separate embeddings-per-second and embedding-token-throughput fields.
-- Made slim `/api/show` metadata extraction architecture-agnostic by scanning dynamic `*.context_length` and `*.embedding_length` keys such as `gptoss.context_length`, `qwen35.context_length`, and `qwen35moe.context_length`.
-- Calibrated monitor and orchestrator hardware wording: power-cap activity is reported as normal/warn power-limit behavior, hardware slowdown remains critical, memory junction temperature can be unknown, and PCIe Gen3 x8 is framed as a load/offload/concurrency warning rather than automatic resident-decode failure.
+- Added `scripts/ollama-bench-RTX3090.sh` and Bash wrapper support for `ollama bench MODEL`, which auto-routes generation-capable models to `/api/generate` and embedding-only models to `/api/embed`; `--route-only` prints the route without running a benchmark.
+- Changed strict generation behavior for embedding-only models from generic benchmark failure to `UNSUPPORTED`, exit code `2`, tag-preserving next actions, and zero API error-row inflation.
+- Expanded embedding benchmark mode to four `/api/embed` rows: sanity, 32-item batch, long-context, and RAG-profile chunks.
+- Added streaming generation instrumentation with `ttft_any_ms`, `ttft_thinking_ms`, `ttft_answer_ms`, `time_to_100_tokens_ms`, `end_to_end_500_ms`, `decode_tps_raw`, `visible_answer_tps`, and `thinking_only` fields.
+- Renamed misleading `Cold` reporting to `FirstReqLoad` and added `--load-mode observed|warm|unload-model|restart-ollama` with saved load-state evidence.
+- Added sample validity classification, including `SHORT_SAMPLE`, `UNDERFILLED`, and `UNSUPPORTED`, with minimum generated-token and long-context fill thresholds.
+- Made model metadata extraction architecture-agnostic for context length and embedding length keys such as `gptoss.context_length`, `qwen35.context_length`, and other `*.context_length` / `*.embedding_length` fields.
+- Calibrated RTX 3090 telemetry warnings: software power-limit samples are reported as power-cap behavior, hardware slowdown is critical, memory junction unavailable is unknown, and VRAM/PCIe warnings are severity-scoped.
+- Added richer WSL/filesystem/storage diagnostics and broader `nvidia-smi -q` capture.
+- Removed legacy/generated package debris: `scripts/legacy/`, obsolete `changelog/plan.txt`, run archives, cache files, and the legacy Python dependency in `ollama-perf-table`.
+- Added ADOS apply/verify quality artifacts under `qa-evidence/`, including a schema-validated `evidence-ledger.jsonl`.
 
 # v1.6.0 - capability-aware model roles and embedding benchmark mode
 

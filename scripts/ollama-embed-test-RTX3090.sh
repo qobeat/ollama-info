@@ -8,7 +8,7 @@ usage() {
   cat <<EOF_USAGE
 ollama-embed-test-RTX3090.sh v$VERSION
 
-Run RTX 3090 + Ollama embedding health/performance tests through /api/embed and monitor telemetry.
+Run RTX 3090 + Ollama embedding health/performance tests through /api/embed and monitor telemetry. v1.7 includes batch, long-context, and RAG-profile embedding rows.
 
 Usage:
   ./ollama-embed-test-RTX3090.sh MODEL_PATTERN [options]

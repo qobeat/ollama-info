@@ -8,7 +8,7 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 source "$COMMON_SCRIPT"
 
 VERSION="1.7.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-aware-latency-workloads"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-latency-agentic-cleanup"
 
 MODEL="${MODEL:-}"
 MODEL_PATTERN="${MODEL_PATTERN:-}"
@@ -21,11 +21,12 @@ LONG_CTX="${LONG_CTX:-8192}"
 NUM_PREDICT="${NUM_PREDICT:-512}"
 LONG_NUM_PREDICT="${LONG_NUM_PREDICT:-1024}"
 LONG_PROMPT_WORDS="${LONG_PROMPT_WORDS:-3200}"
-LONG_CONTEXT_MIN_FILL_PCT="${LONG_CONTEXT_MIN_FILL_PCT:-35}"
+LONG_CONTEXT_MIN_FILL_PCT="${LONG_CONTEXT_MIN_FILL_PCT:-65}"
+DECODE512_MIN_EVAL_TOKENS="${DECODE512_MIN_EVAL_TOKENS:-384}"
+DECODE1024_MIN_EVAL_TOKENS="${DECODE1024_MIN_EVAL_TOKENS:-900}"
+LONGCTX_MIN_EVAL_TOKENS="${LONGCTX_MIN_EVAL_TOKENS:-256}"
 TEMPERATURE="${TEMPERATURE:-0.2}"
 KEEP_ALIVE="${KEEP_ALIVE:-30m}"
-COLD_MODE="${COLD_MODE:-observed}"
-COLD_VERIFIED="${COLD_VERIFIED:-0}"
 TIMEOUT_SEC="${TIMEOUT_SEC:-600}"
 CONNECT_TIMEOUT_SEC="${CONNECT_TIMEOUT_SEC:-5}"
 RUN_CONC="${RUN_CONC:-0}"
@@ -48,6 +49,10 @@ CAPTURE_WSL_DIAGNOSTICS="${CAPTURE_WSL_DIAGNOSTICS:-1}"
 EMBEDDING_MODE="${EMBEDDING_MODE:-0}"
 FULL_MODEL_SHOW="${FULL_MODEL_SHOW:-0}"
 MODEL_ROLE="${MODEL_ROLE:-unknown}"
+STREAM_GENERATION="${STREAM_GENERATION:-1}"
+LOAD_MODE="${LOAD_MODE:-observed}"
+COLD_VERIFIED="0"
+MODEL_RESIDENT_BEFORE="unknown"
 
 RUN_DIR="$OUT_DIR/run-$RUN_ID"
 RAW_DIR="$RUN_DIR/raw"
@@ -69,6 +74,7 @@ API_SHOW_FILE="$RUN_DIR/ollama-api-show-model.json"
 API_SHOW_RAW_FILE="$RUN_DIR/ollama-api-show-model-raw.json"
 API_SHOW_FULL_FILE="$RUN_DIR/ollama-api-show-model-full.json"
 MODEL_CAPABILITY_FILE="$RUN_DIR/model-capability.json"
+LOAD_STATE_FILE="$RUN_DIR/load-state.txt"
 DMESG_CURSOR_FILE="$RUN_DIR/dmesg-start-line-count.txt"
 OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 
@@ -107,10 +113,11 @@ Core options:
   --long-prompt-words N     Approximate words in the true long-context prompt (default: $LONG_PROMPT_WORDS)
   --temperature X           Generation temperature (default: $TEMPERATURE)
   --timeout-sec N           curl max time per request (default: $TIMEOUT_SEC)
-  --cold-mode MODE          observed|verified. Verified only labels cold when ollama ps/api ps prove model absent before first request
   --concurrency N           Parallel GPU requests for concurrency probe (default: $CONCURRENCY)
   --think VALUE             Ollama top-level think: false|true|none|low|medium|high (default: $THINK)
   --embedding               Run /api/embed benchmark mode instead of /api/generate
+  --stream / --no-stream     Enable/disable streaming generation instrumentation for TTFT (default: $STREAM_GENERATION)
+  --load-mode MODE           observed|warm|unload-model|restart-ollama; controls load-state semantics (default: $LOAD_MODE)
   --prompt-prefix TEXT      Optional prompt prefix; default is empty
   --server-log-lines N      Capture last N Ollama server log lines when available (default: $SERVER_LOG_LINES)
   --no-wsl-diagnostics      Skip WSL/Windows-side configuration snapshots
@@ -144,7 +151,7 @@ Usage: $(script_display_cmd) <model-pattern> [options]
 Example: $(script_display_cmd) qwen3.6
 Baseline run: $(script_display_cmd) qwen3.6
 Stress run:   $(script_display_cmd) qwen3.6 --stress
-Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE
+Defaults: ctx=$NUM_CTX long_ctx=$LONG_CTX predict=$NUM_PREDICT concurrency=$CONCURRENCY think=$THINK embedding=$EMBEDDING_MODE stream=$STREAM_GENERATION load_mode=$LOAD_MODE
 Use -h for full options.
 EOF_SHORT
 }
@@ -196,11 +203,13 @@ while [[ $# -gt 0 ]]; do
     --long-prompt-words) LONG_PROMPT_WORDS="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --temperature) TEMPERATURE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --timeout-sec) TIMEOUT_SEC="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
-    --cold-mode|--load-mode) COLD_MODE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --concurrency) CONCURRENCY="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --think) THINK="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --embedding|--embed) EMBEDDING_MODE=1; shift ;;
     --no-embedding|--no-embed) EMBEDDING_MODE=0; shift ;;
+    --stream) STREAM_GENERATION=1; shift ;;
+    --no-stream) STREAM_GENERATION=0; shift ;;
+    --load-mode) LOAD_MODE="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --prompt-prefix) PROMPT_PREFIX="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --server-log-lines) SERVER_LOG_LINES="$(ollama_require_arg_value "$1" "${2-}")"; shift 2 ;;
     --wsl-diagnostics) CAPTURE_WSL_DIAGNOSTICS=1; shift ;;
@@ -235,11 +244,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for n in NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS TIMEOUT_SEC CONNECT_TIMEOUT_SEC CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT SERVER_LOG_LINES; do
+for n in NUM_CTX LONG_CTX NUM_PREDICT LONG_NUM_PREDICT LONG_PROMPT_WORDS TIMEOUT_SEC CONNECT_TIMEOUT_SEC CONCURRENCY SOAK_MINUTES SOAK_NUM_PREDICT VRAM_CTX VRAM_NUM_PREDICT SERVER_LOG_LINES DECODE512_MIN_EVAL_TOKENS DECODE1024_MIN_EVAL_TOKENS LONGCTX_MIN_EVAL_TOKENS; do
   is_uint "${!n}" || { echo "ERROR: $n must be an integer" >&2; exit 2; }
 done
 case "$THINK" in true|false|none|low|medium|high) ;; *) echo "ERROR: --think must be false, true, none, low, medium, or high" >&2; exit 2 ;; esac
-case "$COLD_MODE" in observed|verified|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --cold-mode must be observed, verified, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$LOAD_MODE" in observed|warm|unload-model|restart-ollama) ;; *) echo "ERROR: --load-mode must be observed, warm, unload-model, or restart-ollama" >&2; exit 2 ;; esac
+case "$STREAM_GENERATION" in 0|1) ;; *) echo "ERROR: --stream/--no-stream must resolve to 0 or 1" >&2; exit 2 ;; esac
 [[ "$CONCURRENCY" -ge 1 ]] || CONCURRENCY=1
 [[ "$LONG_PROMPT_WORDS" -ge 64 ]] || LONG_PROMPT_WORDS=64
 
@@ -262,6 +272,7 @@ API_SHOW_FILE="$RUN_DIR/ollama-api-show-model.json"
 API_SHOW_RAW_FILE="$RUN_DIR/ollama-api-show-model-raw.json"
 API_SHOW_FULL_FILE="$RUN_DIR/ollama-api-show-model-full.json"
 MODEL_CAPABILITY_FILE="$RUN_DIR/model-capability.json"
+LOAD_STATE_FILE="$RUN_DIR/load-state.txt"
 DMESG_CURSOR_FILE="$RUN_DIR/dmesg-start-line-count.txt"
 OLLAMA_SHOW_FILE="$RUN_DIR/ollama-show-model.txt"
 mkdir -p "$RUN_DIR" "$RAW_DIR" "$PAYLOAD_DIR" "$TMP_DIR"
@@ -342,16 +353,21 @@ write_meta() {
     echo "embedding_mode=$EMBEDDING_MODE"
     echo "full_model_show=$FULL_MODEL_SHOW"
     echo "model_role=$MODEL_ROLE"
+    echo "stream_generation=$STREAM_GENERATION"
+    echo "load_mode=$LOAD_MODE"
+    echo "cold_verified=$COLD_VERIFIED"
+    echo "model_resident_before=$MODEL_RESIDENT_BEFORE"
     echo "num_ctx=$NUM_CTX"
     echo "long_ctx=$LONG_CTX"
     echo "num_predict=$NUM_PREDICT"
     echo "long_num_predict=$LONG_NUM_PREDICT"
     echo "long_prompt_words=$LONG_PROMPT_WORDS"
     echo "long_context_min_fill_pct=$LONG_CONTEXT_MIN_FILL_PCT"
+    echo "decode512_min_eval_tokens=$DECODE512_MIN_EVAL_TOKENS"
+    echo "decode1024_min_eval_tokens=$DECODE1024_MIN_EVAL_TOKENS"
+    echo "longctx_min_eval_tokens=$LONGCTX_MIN_EVAL_TOKENS"
     echo "temperature=$TEMPERATURE"
     echo "keep_alive=$KEEP_ALIVE"
-    echo "cold_mode=$COLD_MODE"
-    echo "cold_verified=$COLD_VERIFIED"
     echo "timeout_sec=$TIMEOUT_SEC"
     echo "run_conc=$RUN_CONC"
     echo "concurrency=$CONCURRENCY"
@@ -379,31 +395,11 @@ snapshot_before_after() {
   local label="$1"
   if command -v nvidia-smi >/dev/null 2>&1; then
     nvidia-smi >"$RUN_DIR/nvidia-smi-$label.txt" 2>&1 || true
-    nvidia-smi -q -d POWER,TEMPERATURE,CLOCK,PERFORMANCE,PCI,MEMORY,UTILIZATION >"$RUN_DIR/nvidia-smi-q-$label.txt" 2>&1 || true
+    nvidia-smi -q -d CLOCK,POWER,TEMPERATURE,PERFORMANCE,PCIE,MEMORY,UTILIZATION >"$RUN_DIR/nvidia-smi-q-$label.txt" 2>&1 || nvidia-smi -q -d POWER,TEMPERATURE,CLOCK,PERFORMANCE,PCI,MEMORY,UTILIZATION >"$RUN_DIR/nvidia-smi-q-$label.txt" 2>&1 || true
     nvidia-smi --query-gpu=timestamp,index,name,driver_version,pci.bus_id,temperature.gpu,power.draw,power.limit,memory.used,memory.total,utilization.gpu,utilization.memory,clocks.gr,clocks.sm,clocks.mem,pcie.link.gen.current,pcie.link.width.current,pcie.link.gen.max,pcie.link.width.max,pstate,fan.speed --format=csv >"$RUN_DIR/nvidia-smi-query-$label.csv" 2>&1 || true
   fi
   if command -v ollama >/dev/null 2>&1; then ollama ps >"$RUN_DIR/ollama-ps-$label.txt" 2>&1 || true; else echo "ollama CLI not found" >"$RUN_DIR/ollama-ps-$label.txt"; fi
   curl -fsS "$BASE_URL/api/ps" >"$RUN_DIR/ollama-api-ps-$label.json" 2>/dev/null || true
-}
-
-model_resident_now() {
-  local model_name="$1"
-  if command -v ollama >/dev/null 2>&1 && ollama ps 2>/dev/null | awk -v m="$model_name" 'NR>1 && ($1==m || index($0,m)>0){found=1} END{exit found?0:1}'; then
-    return 0
-  fi
-  curl -fsS "$BASE_URL/api/ps" 2>/dev/null | jq -e --arg m "$model_name" '.models[]? | select((.name // .model // "") == $m or (.model // "") == $m)' >/dev/null 2>&1
-}
-
-verify_cold_precondition() {
-  COLD_VERIFIED=0
-  if [[ "$COLD_MODE" != "verified" ]]; then return 0; fi
-  if model_resident_now "$MODEL"; then
-    warn "Cold verified requested but model is already resident before first request: $MODEL"
-    COLD_VERIFIED=0
-    return 0
-  fi
-  COLD_VERIFIED=1
-  printf 'ColdVerified precondition: model absent before first request: %s\n' "$MODEL" >"$RUN_DIR/cold-verified.txt"
 }
 
 capture_dmesg_cursor() {
@@ -457,6 +453,16 @@ capture_wsl_diagnostics() {
     echo "## Linux kernel"
     uname -a 2>&1 || true
     cat /proc/version 2>/dev/null || true
+    echo
+    echo "## Ollama model storage and filesystem"
+    df -T "$HOME/.ollama" 2>&1 || df -T "$HOME" 2>&1 || true
+    du -sh "$HOME/.ollama/models" 2>&1 || true
+    echo
+    echo "## Mounts relevant to WSL/model storage"
+    mount | grep -E ' / |/mnt/c|drvfs|\.ollama' 2>/dev/null || mount 2>&1 | head -80 || true
+    echo
+    echo "## Block devices"
+    lsblk -o NAME,SIZE,MODEL,TYPE,MOUNTPOINTS 2>&1 || true
     echo
     echo "## kernel command line"
     cat /proc/cmdline 2>/dev/null || true
@@ -587,7 +593,7 @@ free_vram_before_gib() {
 }
 
 make_failure_hints() {
-  local first_body="" first_class="" body class f count=0 blob model_gib free_gib
+  local first_body="" first_class="" body class f count=0 unsupported_count=0 blob model_gib free_gib
   {
     echo "# RTX 3090 Ollama failure hints"
     echo "timestamp=$(date -Is)"
@@ -599,6 +605,9 @@ make_failure_hints() {
   shopt -s nullglob
   for f in "$RAW_DIR"/*.json; do
     [[ -e "$f" ]] || continue
+    case "$(basename "$f")" in *.stream-metrics.json) continue ;; esac
+    [[ -e "${f%.json}.http" ]] || continue
+    if jq -e '(.result_state? == "UNSUPPORTED") or ((.error? // "") | test("embedding-only|does not support generate"; "i"))' "$f" >/dev/null 2>&1; then unsupported_count=$((unsupported_count + 1)); continue; fi
     raw_response_is_error "$f" "${f%.json}.http" || continue
     body="$(error_body_from_raw "$f" "${f%.json}.stderr")"
     [[ -n "$body" ]] || body="http=$(cat "${f%.json}.http" 2>/dev/null || printf 000) raw=$(head -c 500 "$f" 2>/dev/null | tr '\n' ' ')"
@@ -608,6 +617,16 @@ make_failure_hints() {
     count=$((count + 1))
   done
   shopt -u nullglob
+  if [[ "$unsupported_count" -gt 0 ]]; then
+    {
+      echo "primary_error_class=unsupported_generate_for_embedding_model"
+      echo "api_error_rows=0"
+      echo "first_api_error=model $MODEL is embedding-only for generation mode"
+      echo "likely_cause=selected model is embedding-only and does not support /api/generate."
+      echo "next_action=use a generation model with ollama test, or run embedding mode with: ollama embed-test $MODEL"
+    } >>"$FAILURE_HINTS"
+    return 0
+  fi
   if [[ "$count" -eq 0 ]]; then
     {
       echo "primary_error_class=none"
@@ -638,7 +657,7 @@ make_failure_hints() {
         ;;
       unsupported_generate_for_embedding_model)
         echo "likely_cause=selected model is embedding-only and does not support /api/generate."
-        echo "next_action=use a generation model with ollama test, or run embedding mode with: ollama embed-test $MODEL"
+        echo "next_action=use a generation model with ollama test, or run embedding mode with: ollama embed-test ${MODEL}"
         ;;
       embedding_empty_response)
         echo "likely_cause=/api/embed returned JSON but no embedding vectors or vector dimension was detected."
@@ -666,7 +685,7 @@ make_failure_hints() {
 
 csv_header() {
   printf '%s
-' 'timestamp,category,test,model,num_ctx,num_predict,mode,concurrency,request_wall_s,response_chars,thinking_chars,done_reason,total_s,load_s,prompt_eval_tokens,eval_tokens,prompt_tps,gen_tps,decode_tps_raw,visible_answer_tps,thinking_only,ttft_any_ms,ttft_thinking_ms,ttft_answer_ms,end_to_end_500_ms,prompt_eval_s,eval_s,prompt_chars,prompt_words,context_fill_pct,sample_status,error,http_code,error_class,error_body,raw_json,payload_json,endpoint,vector_count,vector_dim,embedding_tps,embed_tokens_per_s' >"$SUMMARY_CSV"
+' 'timestamp,category,test,model,num_ctx,num_predict,mode,concurrency,request_wall_s,response_chars,thinking_chars,done_reason,total_s,load_s,prompt_eval_tokens,eval_tokens,prompt_tps,gen_tps,prompt_eval_s,eval_s,prompt_chars,prompt_words,context_fill_pct,error,http_code,error_class,error_body,raw_json,payload_json,endpoint,vector_count,vector_dim,embedding_tps,ttft_any_ms,ttft_thinking_ms,ttft_answer_ms,time_to_100_tokens_ms,end_to_end_500_ms,decode_tps_raw,visible_answer_tps,thinking_only,sample_status,result_state' >"$SUMMARY_CSV"
   printf '%s
 ' 'timestamp,concurrency,wall_s,total_eval_tokens,total_response_chars,aggregate_gen_tps,requests_ok,requests_error,raw_glob' >"$CONC_AGG_CSV"
   printf '%s
@@ -674,8 +693,9 @@ csv_header() {
 }
 
 build_payload() {
-  local model_name="$1" prompt="$2" np="$3" ctx="$4" mode="$5" gpu_opts='{}' think_json='null'
+  local model_name="$1" prompt="$2" np="$3" ctx="$4" mode="$5" gpu_opts='{}' think_json='null' stream_json="$STREAM_GENERATION"
   if [[ "$mode" == "CPU" ]]; then gpu_opts='{"num_gpu":0}'; fi
+  [[ "$stream_json" == "1" ]] && stream_json=true || stream_json=false
   case "$THINK" in
     true|false) think_json="$THINK" ;;
     low|medium|high) think_json="$(jq -Rn --arg v "$THINK" '$v')" ;;
@@ -684,11 +704,142 @@ build_payload() {
   jq -nc \
     --arg model "$model_name" --arg prompt "$prompt" --arg keep "$KEEP_ALIVE" \
     --argjson np "$np" --argjson ctx "$ctx" --argjson temp "$TEMPERATURE" \
-    --argjson gpu_opts "$gpu_opts" --argjson think "$think_json" \
-    '{model:$model,prompt:$prompt,stream:true,keep_alive:$keep,options:({num_predict:$np,num_ctx:$ctx,temperature:$temp,seed:42} + $gpu_opts)} | if $think == null then . else . + {think:$think} end'
+    --argjson gpu_opts "$gpu_opts" --argjson think "$think_json" --argjson stream "$stream_json" \
+    '{model:$model,prompt:$prompt,stream:$stream,keep_alive:$keep,options:({num_predict:$np,num_ctx:$ctx,temperature:$temp,seed:42} + $gpu_opts)} | if $think == null then . else . + {think:$think} end'
 }
 
 prompt_word_count() { awk '{n+=NF} END{print n+0}' <<<"$1"; }
+
+ollama_curl_generate_stream() {
+  local timeout_sec="$1" connect_timeout_sec="$2" payload_file="$3" stream_file="$4" http_file="$5" stderr_file="$6" base_url="$7" start_ns="$8" metrics_file="$9"
+  local first_any_file="$metrics_file.first_any_ns" first_thinking_file="$metrics_file.first_thinking_ns" first_answer_file="$metrics_file.first_answer_ns" rc
+  : >"$stream_file"; : >"$http_file"; : >"$stderr_file"; rm -f "$first_any_file" "$first_thinking_file" "$first_answer_file" "$metrics_file"
+  set +e
+  {
+    if command -v timeout >/dev/null 2>&1; then
+      timeout -k 10s "$timeout_sec" curl -sS --no-buffer --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/x-ndjson, application/json' -d "@$payload_file" --write-out '\n__OLLAMA_HTTP_CODE__:%{http_code}\n' "$base_url/api/generate"
+    else
+      curl -sS --no-buffer --connect-timeout "$connect_timeout_sec" --max-time "$timeout_sec" -H 'Content-Type: application/json' -H 'Accept: application/x-ndjson, application/json' -d "@$payload_file" --write-out '\n__OLLAMA_HTTP_CODE__:%{http_code}\n' "$base_url/api/generate"
+    fi
+  } 2>"$stderr_file" | while IFS= read -r line; do
+    local ns
+    [[ -n "$line" ]] || continue
+    ns="$(date +%s%N)"
+    case "$line" in
+      __OLLAMA_HTTP_CODE__:*) printf '%s' "${line#__OLLAMA_HTTP_CODE__:}" >"$http_file" ;;
+      *)
+        printf '%s\n' "$line" >>"$stream_file"
+        [[ -s "$first_any_file" ]] || printf '%s\n' "$ns" >"$first_any_file"
+        if [[ ! -s "$first_answer_file" ]] && jq -e '((.response? // "") | length) > 0' <<<"$line" >/dev/null 2>&1; then printf '%s\n' "$ns" >"$first_answer_file"; fi
+        if [[ ! -s "$first_thinking_file" ]] && jq -e '((.thinking? // "") | length) > 0' <<<"$line" >/dev/null 2>&1; then printf '%s\n' "$ns" >"$first_thinking_file"; fi
+        ;;
+    esac
+  done
+  rc=${PIPESTATUS[0]}
+  set -e
+  local any_ns thinking_ns answer_ns any_ms thinking_ms answer_ms
+  any_ns="$(cat "$first_any_file" 2>/dev/null || true)"; thinking_ns="$(cat "$first_thinking_file" 2>/dev/null || true)"; answer_ns="$(cat "$first_answer_file" 2>/dev/null || true)"
+  any_ms="$(awk -v s="$start_ns" -v n="${any_ns:-0}" 'BEGIN{if(n>0) printf "%.3f", (n-s)/1000000; else print ""}')"
+  thinking_ms="$(awk -v s="$start_ns" -v n="${thinking_ns:-0}" 'BEGIN{if(n>0) printf "%.3f", (n-s)/1000000; else print ""}')"
+  answer_ms="$(awk -v s="$start_ns" -v n="${answer_ns:-0}" 'BEGIN{if(n>0) printf "%.3f", (n-s)/1000000; else print ""}')"
+  jq -n --arg any "$any_ms" --arg thinking "$thinking_ms" --arg answer "$answer_ms" \
+    '{ttft_any_ms: (if $any=="" then null else ($any|tonumber) end), ttft_thinking_ms: (if $thinking=="" then null else ($thinking|tonumber) end), ttft_answer_ms: (if $answer=="" then null else ($answer|tonumber) end)}' >"$metrics_file" 2>/dev/null || true
+  return "$rc"
+}
+
+ollama_stream_to_final_json() {
+  local stream_file="$1" raw_file="$2" metrics_file="$3"
+  if [[ -s "$stream_file" ]] && jq -s --slurpfile metrics "$metrics_file" '
+      (map(select(type=="object"))) as $rows |
+      if ($rows|length) == 0 then {error:"empty streaming response", _stream_metrics:($metrics[0] // {})}
+      else
+        (([$rows[] | select(.done == true)] | last) // ($rows[-1] // {})) as $final |
+        $final + {
+          response: ($rows | map(.response? // "") | join("")),
+          thinking: ($rows | map(.thinking? // "") | join("")),
+          _stream_metrics: ($metrics[0] // {})
+        }
+      end' "$stream_file" >"$raw_file" 2>"$raw_file.jqstderr"; then
+    return 0
+  fi
+  if [[ -s "$stream_file" ]]; then
+    cp "$stream_file" "$raw_file"
+  else
+    jq -n --slurpfile metrics "$metrics_file" '{error:"empty streaming response", _stream_metrics:($metrics[0] // {})}' >"$raw_file" 2>/dev/null || : >"$raw_file"
+  fi
+}
+
+model_resident_in_file() {
+  local file="$1" model_name="$2"
+  [[ -s "$file" ]] || return 1
+  if [[ "$file" == *.json ]]; then
+    jq -e --arg m "$model_name" '(.models // [])[]? | select((.name // .model // "") == $m or (.model // "") == $m)' "$file" >/dev/null 2>&1 && return 0
+  fi
+  grep -F -- "$model_name" "$file" >/dev/null 2>&1
+}
+
+assess_load_state() {
+  MODEL_RESIDENT_BEFORE="absent"
+  if model_resident_in_file "$RUN_DIR/ollama-api-ps-before.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before.txt" "$MODEL"; then
+    MODEL_RESIDENT_BEFORE="present"
+  fi
+  COLD_VERIFIED="0"
+  if [[ "$LOAD_MODE" == "warm" ]]; then
+    COLD_VERIFIED="0"
+  elif [[ "$LOAD_MODE" == "unload-model" ]]; then
+    ollama_unload_model || true
+    snapshot_before_after before-unload-check
+    if model_resident_in_file "$RUN_DIR/ollama-api-ps-before-unload-check.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before-unload-check.txt" "$MODEL"; then
+      COLD_VERIFIED="0"
+    else
+      COLD_VERIFIED="1"
+      MODEL_RESIDENT_BEFORE="absent_after_unload"
+    fi
+  elif [[ "$LOAD_MODE" == "restart-ollama" ]]; then
+    ollama_restart_service || true
+    sleep 2
+    snapshot_before_after before-restart-check
+    if model_resident_in_file "$RUN_DIR/ollama-api-ps-before-restart-check.json" "$MODEL" || model_resident_in_file "$RUN_DIR/ollama-ps-before-restart-check.txt" "$MODEL"; then
+      COLD_VERIFIED="0"
+    else
+      COLD_VERIFIED="1"
+      MODEL_RESIDENT_BEFORE="absent_after_restart"
+    fi
+  elif [[ "$MODEL_RESIDENT_BEFORE" == "absent" ]]; then
+    COLD_VERIFIED="1"
+  fi
+  {
+    echo "load_mode=$LOAD_MODE"
+    echo "model_resident_before=$MODEL_RESIDENT_BEFORE"
+    echo "cold_verified=$COLD_VERIFIED"
+    echo "note=FirstReqLoad is Ollama load_duration on first request; it is ColdVerified only when Ollama ps/API ps proves the model was absent before the first benchmark request or after a verified unload/restart."
+  } >"$LOAD_STATE_FILE"
+}
+
+ollama_restart_service() {
+  log "LoadMode: requesting Ollama service restart before benchmark"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user restart ollama >/dev/null 2>"$RUN_DIR/restart-ollama.stderr" && { printf 'systemctl --user restart ollama
+' >"$RUN_DIR/restart-ollama.command"; return 0; }
+    systemctl restart ollama >/dev/null 2>>"$RUN_DIR/restart-ollama.stderr" && { printf 'systemctl restart ollama
+' >"$RUN_DIR/restart-ollama.command"; return 0; }
+  fi
+  warn "LOAD_MODE=restart-ollama could not restart Ollama via systemctl; ColdVerified requires model absence evidence after restart"
+  return 1
+}
+
+ollama_unload_model() {
+  local payload="$RUN_DIR/unload-model-request.json" raw="$RUN_DIR/unload-model-response.json" http="$RUN_DIR/unload-model.http" err="$RUN_DIR/unload-model.stderr"
+  log "LoadMode: requesting unload for $MODEL before benchmark"
+  if [[ "$EMBEDDING_MODE" == "1" || "$MODEL_ROLE" == "embedding" ]]; then
+    jq -nc --arg model "$MODEL" '{model:$model,input:"unload",keep_alive:0}' >"$payload"
+    ollama_curl_embed "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload" "$raw" "$http" "$err" "$BASE_URL" || true
+  else
+    jq -nc --arg model "$MODEL" '{model:$model,prompt:"",stream:false,keep_alive:0,options:{num_predict:0}}' >"$payload"
+    ollama_curl_generate "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload" "$raw" "$http" "$err" "$BASE_URL" || true
+  fi
+}
+
 append_csv_line() {
   local line="$1" lock="$RUN_DIR/summary.csv.lock" tries=0
   while ! mkdir "$lock" 2>/dev/null; do
@@ -754,71 +905,57 @@ append_summary_from_json() {
   [[ -n "$http_code" ]] || http_code=""
   [[ -n "$error_class" ]] || error_class="$err_msg"
   if [[ -n "$err_msg" ]]; then
-    line="$(jq -rn --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg err "$err_msg" --arg http "$http_code" --arg cls "$error_class" --arg body "$error_body" --arg raw "$raw_file" --arg payload "$payload_file" \
-      '[$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,"","","","","","","","","","","","false","","","","","","",$pc,$pw,"","ERROR",$err,$http,$cls,$body,$raw,$payload,"/api/generate","","","",""] | @csv')"
+    local result_state="FAIL" sample_status="ERROR"
+    if [[ "$error_class" == "unsupported_generate_for_embedding_model" ]]; then result_state="UNSUPPORTED"; sample_status="UNSUPPORTED"; fi
+    line="$(jq -rn --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg err "$err_msg" --arg http "$http_code" --arg cls "$error_class" --arg body "$error_body" --arg raw "$raw_file" --arg payload "$payload_file" --arg sample "$sample_status" --arg state "$result_state" \
+      '[$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,"","","","","","","","","","","",$pc,$pw,"",$err,$http,$cls,$body,$raw,$payload,"/api/generate","","","","","","","","","","","",$sample,$state] | @csv')"
     append_csv_line "$line"
     return 0
   fi
-  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg http "$http_code" --arg raw "$raw_file" --arg payload "$payload_file" '
+  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg np "$np" --arg mode "$mode" --arg conc "$conc" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg http "$http_code" --arg raw "$raw_file" --arg payload "$payload_file" --argjson min512 "$DECODE512_MIN_EVAL_TOKENS" --argjson min1024 "$DECODE1024_MIN_EVAL_TOKENS" --argjson minlong "$LONGCTX_MIN_EVAL_TOKENS" --argjson minfill "$LONG_CONTEXT_MIN_FILL_PCT" '
     def sec(ns): if ns == null then null else (ns / 1000000000) end;
     def tps(tokens; ns): if tokens == null or ns == null or ns == 0 then null else (tokens / (ns / 1000000000)) end;
     def fill(tokens; ctx): if tokens == null or ctx == null or (ctx|tonumber)==0 then null else (100 * (tokens|tonumber) / (ctx|tonumber)) end;
-    def min_tokens($cat; $np; $eval; $fill):
-      if $cat=="throughput" and ($np|tonumber)>=512 and ($eval|tonumber)<384 then "SHORT_SAMPLE"
-      elif $cat=="sustained" and ($np|tonumber)>=1024 and ($eval|tonumber)<900 then "SHORT_SAMPLE"
-      elif $cat=="longctx" and (($fill|tonumber)<65 or ($eval|tonumber)<256) then "SHORT_SAMPLE"
+    def metric($k): (._stream_metrics[$k] // null);
+    def eval_tokens: (.eval_count // 0);
+    def gen_tps: (tps(.eval_count;.eval_duration));
+    def fill_pct: (fill(.prompt_eval_count;$ctx));
+    def sample_status:
+      if $cat == "throughput" and eval_tokens < $min512 then "SHORT_SAMPLE"
+      elif $cat == "sustained" and eval_tokens < $min1024 then "SHORT_SAMPLE"
+      elif $cat == "longctx" and ((fill_pct // 0) < $minfill) then "UNDERFILLED"
+      elif $cat == "longctx" and eval_tokens < $minlong then "SHORT_SAMPLE"
       else "OK" end;
-    def thinking_only: (((.response // "")|length)==0 and ((.thinking // "")|length)>0);
-    [$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,((.response // "")|length),((.thinking // "")|length),(.done_reason // ""),(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),(.eval_count//""),(tps(.prompt_eval_count;.prompt_eval_duration)//""),(tps(.eval_count;.eval_duration)//""),(tps(.eval_count;.eval_duration)//""),(if ((.response // "")|length)>0 then (tps(.eval_count;.eval_duration)//"") else "" end),(thinking_only|tostring),(.ttft_any_ms//""),(.ttft_thinking_ms//""),(.ttft_answer_ms//""),(.end_to_end_500_ms//""),(sec(.prompt_eval_duration)//""),(sec(.eval_duration)//""),$pc,$pw,(fill(.prompt_eval_count;$ctx)//""),(min_tokens($cat;$np;(.eval_count//0);(fill(.prompt_eval_count;$ctx)//0))),"",$http,"","",$raw,$payload,"/api/generate","","","",""] | @csv' "$raw_file")"
+    def result_state: if sample_status == "OK" then "PASS" else "INCONCLUSIVE" end;
+    def thinking_only: (((.response // "")|length) == 0 and ((.thinking // "")|length) > 0);
+    def ttfa: metric("ttft_answer_ms");
+    def e2e_tokens($n): if (ttfa != null and gen_tps != null and gen_tps > 0) then (ttfa + (($n / gen_tps) * 1000)) else null end;
+    [$ts,$cat,$test,$model,$ctx,$np,$mode,$conc,$wall,((.response // "")|length),((.thinking // "")|length),(.done_reason // ""),(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),(.eval_count//""),(tps(.prompt_eval_count;.prompt_eval_duration)//""),(gen_tps//""),(sec(.prompt_eval_duration)//""),(sec(.eval_duration)//""),$pc,$pw,(fill_pct//""),"",$http,"","",$raw,$payload,"/api/generate","","","",(metric("ttft_any_ms")//""),(metric("ttft_thinking_ms")//""),(metric("ttft_answer_ms")//""),(e2e_tokens(100)//""),(e2e_tokens(500)//""),(gen_tps//""),(if (((.response // "")|length)>0) then (gen_tps//"") else "" end),(thinking_only|tostring),sample_status,result_state] | @csv' "$raw_file")"
   append_csv_line "$line"
 }
 
 run_generate() {
   local category="$1" test_name="$2" model_name="$3" mode="$4" conc="$5" np="$6" ctx="$7" prompt="$8" step_label="${9:-?}"
-  local payload_file="$PAYLOAD_DIR/$test_name.json" raw_file="$RAW_DIR/$test_name.json" jsonl_file="$RAW_DIR/$test_name.jsonl" timing_file="$RAW_DIR/$test_name.timing" stderr_file="$RAW_DIR/$test_name.stderr" http_file="$RAW_DIR/$test_name.http" rc=0 start_ns end_ns wall_s prompt_chars prompt_words http_code error_body error_class
+  local payload_file="$PAYLOAD_DIR/$test_name.json" raw_file="$RAW_DIR/$test_name.json" stream_file="$RAW_DIR/$test_name.stream.ndjson" metrics_file="$RAW_DIR/$test_name.stream-metrics.json" stderr_file="$RAW_DIR/$test_name.stderr" http_file="$RAW_DIR/$test_name.http" rc=0 start_ns end_ns wall_s prompt_chars prompt_words http_code error_body error_class
   prompt_chars="${#prompt}"
   prompt_words="$(prompt_word_count "$prompt")"
   build_payload "$model_name" "$prompt" "$np" "$ctx" "$mode" >"$payload_file"
-  log "START [$step_label/$PLANNED_TESTS] $test_name: category=$category model=$model_name mode=$mode ctx=$ctx predict=$np conc=$conc prompt_words=$prompt_words"
+  log "START [$step_label/$PLANNED_TESTS] $test_name: category=$category model=$model_name mode=$mode ctx=$ctx predict=$np conc=$conc prompt_words=$prompt_words stream=$STREAM_GENERATION"
   start_ns="$(date +%s%N)"
   set +e
-  : >"$jsonl_file"; : >"$timing_file"; : >"$http_file"
-  ollama_curl_generate_stream "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload_file" "$jsonl_file" "$http_file" "$stderr_file" "$timing_file" "$BASE_URL"
-  rc=$?
+  if [[ "$STREAM_GENERATION" == "1" ]]; then
+    ollama_curl_generate_stream "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload_file" "$stream_file" "$http_file" "$stderr_file" "$BASE_URL" "$start_ns" "$metrics_file"
+    rc=$?
+    ollama_stream_to_final_json "$stream_file" "$raw_file" "$metrics_file"
+  else
+    ollama_curl_generate "$TIMEOUT_SEC" "$CONNECT_TIMEOUT_SEC" "$payload_file" "$raw_file" "$http_file" "$stderr_file" "$BASE_URL"
+    rc=$?
+  fi
   set -e
   end_ns="$(date +%s%N)"
   wall_s="$(awk -v s="$start_ns" -v e="$end_ns" 'BEGIN{printf "%.6f", (e-s)/1000000000}')"
   http_code="$(tr -dc '0-9' <"$http_file" 2>/dev/null | tail -c 3)"
   [[ -n "$http_code" ]] || http_code="000"
-
-  if [[ -s "$jsonl_file" ]] && jq -s '
-      def ns_to_ms($start; $t): if ($start|tonumber)>0 and ($t|tonumber)>0 then ((($t|tonumber)-($start|tonumber))/1000000) else null end;
-      . as $rows
-      | ($rows[-1] // {}) as $final
-      | $final + {
-          response: ([$rows[]? | .response? // empty] | join("")),
-          thinking: ([$rows[]? | .thinking? // empty] | join(""))
-        }
-    ' "$jsonl_file" >"$raw_file" 2>/dev/null; then
-    local ttft_any_ms ttft_thinking_ms ttft_answer_ms e2e500_ms
-    ttft_any_ms="$(awk -F'\t' '$1 ~ /^[0-9]+$/ && $2 ~ /^\{/ {print $1; exit}' "$timing_file" 2>/dev/null || true)"
-    ttft_thinking_ms="$(awk -F'\t' '$2 ~ /"thinking":"[^"]+/ {print $1; exit}' "$timing_file" 2>/dev/null || true)"
-    ttft_answer_ms="$(awk -F'\t' '$2 ~ /"response":"[^"]+/ {print $1; exit}' "$timing_file" 2>/dev/null || true)"
-    e2e500_ms="$(awk -F'\t' 'BEGIN{c=0} $2 ~ /"response":/ {s=$2; gsub(/^.*"response":"|".*$/,"",s); c+=length(s); if(c>=500){print $1; exit}}' "$timing_file" 2>/dev/null || true)"
-    local req_start_ns
-    req_start_ns="$(awk -F= '$1=="request_start_ns"{print $2; exit}' "$timing_file" 2>/dev/null || true)"
-    awk -v s="$req_start_ns" -v a="$ttft_any_ms" -v th="$ttft_thinking_ms" -v ans="$ttft_answer_ms" -v e="$e2e500_ms" '
-      function ms(t){if(s>0 && t>0) printf "%.3f", (t-s)/1000000; else printf ""}
-      BEGIN{ms(a); printf "\n"; ms(th); printf "\n"; ms(ans); printf "\n"; ms(e); printf "\n"}' >"$RAW_DIR/$test_name.latency.tmp"
-    mapfile -t __lat <"$RAW_DIR/$test_name.latency.tmp"
-    jq --arg ttfta "${__lat[0]:-}" --arg ttftt "${__lat[1]:-}" --arg ttftans "${__lat[2]:-}" --arg e2e "${__lat[3]:-}" \
-      '. + {
-        ttft_any_ms: (if $ttfta=="" then null else ($ttfta|tonumber) end),
-        ttft_thinking_ms: (if $ttftt=="" then null else ($ttftt|tonumber) end),
-        ttft_answer_ms: (if $ttftans=="" then null else ($ttftans|tonumber) end),
-        end_to_end_500_ms: (if $e2e=="" then null else ($e2e|tonumber) end)
-      }' "$raw_file" >"$raw_file.tmp" && mv "$raw_file.tmp" "$raw_file"
-  fi
 
   if [[ "$rc" -ne 0 || ! "$http_code" =~ ^2 ]]; then
     error_body="$(error_body_from_raw "$raw_file" "$stderr_file")"
@@ -842,7 +979,7 @@ run_generate() {
   fi
   append_summary_from_json "$category" "$test_name" "$model_name" "$mode" "$conc" "$np" "$ctx" "$raw_file" "$payload_file" "$wall_s" "$prompt_chars" "$prompt_words" "" "$http_code" "" ""
   local done_line
-  done_line="$(jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" --arg http "$http_code" '"DONE  [\($step)/\($planned)] http=" + $http + " done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" 2>/dev/null || true)"
+  done_line="$(jq -r --arg step "$step_label" --arg planned "$PLANNED_TESTS" --arg wall "$wall_s" --arg http "$http_code" '"DONE  [\($step)/\($planned)] http=" + $http + " done_reason=" + (.done_reason // "") + " prompt_tokens=" + ((.prompt_eval_count // 0)|tostring) + " eval_tokens=" + ((.eval_count // 0)|tostring) + " gen_tps=" + (if (.eval_duration // 0) > 0 then (((.eval_count / (.eval_duration/1000000000))*100|round/100)|tostring) else "n/a" end) + " ttft_any_ms=" + ((._stream_metrics.ttft_any_ms // "")|tostring) + " ttft_answer_ms=" + ((._stream_metrics.ttft_answer_ms // "")|tostring) + " wall_s=" + $wall + " response_chars=" + (((.response // "")|length)|tostring) + " thinking_chars=" + (((.thinking // "")|length)|tostring)' "$raw_file" 2>/dev/null || true)"
   [[ -n "$done_line" ]] && log "$done_line"
 }
 
@@ -863,18 +1000,21 @@ append_embedding_summary_from_json() {
   [[ -n "$error_class" ]] || error_class="$err_msg"
   if [[ -n "$err_msg" ]]; then
     line="$(jq -rn --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg err "$err_msg" --arg http "$http_code" --arg cls "$error_class" --arg body "$error_body" --arg raw "$raw_file" --arg payload "$payload_file" \
-      '[$ts,$cat,$test,$model,$ctx,"","EMBED","1",$wall,"0","0","embed","","","","","","","","","false","","","","","","",$pc,$pw,"","ERROR",$err,$http,$cls,$body,$raw,$payload,"/api/embed","","","",""] | @csv')"
+      '[$ts,$cat,$test,$model,$ctx,"","EMBED","1",$wall,"0","0","embed","","","","","","","","",$pc,$pw,"",$err,$http,$cls,$body,$raw,$payload,"/api/embed","","","","","","","","","","false","ERROR","FAIL"] | @csv')"
     append_csv_line "$line"
     return 0
   fi
-  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg http "$http_code" --arg raw "$raw_file" --arg payload "$payload_file" '
+  line="$(jq -r --arg ts "$(date -Is)" --arg cat "$category" --arg test "$test_name" --arg model "$model_name" --arg ctx "$ctx" --arg wall "$wall_s" --arg pc "$prompt_chars" --arg pw "$prompt_words" --arg http "$http_code" --arg raw "$raw_file" --arg payload "$payload_file" --argjson minfill "$LONG_CONTEXT_MIN_FILL_PCT" '
     def sec(ns): if ns == null then null else (ns / 1000000000) end;
     def tps(tokens; ns): if tokens == null or ns == null or ns == 0 then null else (tokens / (ns / 1000000000)) end;
     def fill(tokens; ctx): if tokens == null or ctx == null or (ctx|tonumber)==0 then null else (100 * (tokens|tonumber) / (ctx|tonumber)) end;
     def vc: ((.embeddings // []) | length);
     def vd: if vc > 0 then ((.embeddings[0] // []) | length) else 0 end;
-    def eps: if (.total_duration // 0) > 0 then (vc / (.total_duration/1000000000)) else null end;
-    [$ts,$cat,$test,$model,$ctx,"","EMBED","1",$wall,"0","0","embed",(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),"",(tps(.prompt_eval_count;.prompt_eval_duration)//""),"","","","false","","","","",(sec(.prompt_eval_duration)//""),"",$pc,$pw,(fill(.prompt_eval_count;$ctx)//""),"OK","",$http,"","",$raw,$payload,"/api/embed",(vc|tostring),(vd|tostring),(eps//""),(tps(.prompt_eval_count;.prompt_eval_duration)//"")] | @csv' "$raw_file")"
+    def etps: if (.total_duration // 0) > 0 then (vc / (.total_duration/1000000000)) else null end;
+    def fill_pct: (fill(.prompt_eval_count;$ctx));
+    def sample_status: if $cat == "embedding_longctx" and ((fill_pct // 0) < $minfill) then "UNDERFILLED" else "OK" end;
+    def result_state: if sample_status == "OK" then "PASS" else "INCONCLUSIVE" end;
+    [$ts,$cat,$test,$model,$ctx,"","EMBED","1",$wall,"0","0","embed",(sec(.total_duration)//""),(sec(.load_duration)//""),(.prompt_eval_count//""),"",(tps(.prompt_eval_count;.prompt_eval_duration)//""),"",(sec(.prompt_eval_duration)//""),"",$pc,$pw,(fill_pct//""),"",$http,"","",$raw,$payload,"/api/embed",(vc|tostring),(vd|tostring),(etps//""),"","","","","","","","false",sample_status,result_state] | @csv' "$raw_file")"
   append_csv_line "$line"
 }
 
@@ -932,8 +1072,8 @@ run_embed() {
 
 record_unsupported_generate_preflight() {
   local raw_file="$RAW_DIR/00_capability_preflight.json" payload_file="$PAYLOAD_DIR/00_capability_preflight.json" http_file="$RAW_DIR/00_capability_preflight.http" stderr_file="$RAW_DIR/00_capability_preflight.stderr" msg
-  msg="model '$MODEL' is embedding-only and does not support generate; use ollama embed-test $MODEL or choose a generation model for ollama test"
-  jq -n --arg model "$MODEL" --arg role "$MODEL_ROLE" --arg status "UNSUPPORTED_GENERATION_MODEL" --arg message "$msg" '{status:$status, message:$message, model:$model, role:$role, endpoint_attempted:"/api/generate", recommended_endpoint:"/api/embed"}' >"$raw_file"
+  msg="model '$MODEL' is embedding-only and does not support generate; use ollama embed-test $MODEL or ollama bench $MODEL"
+  jq -n --arg model "$MODEL" --arg role "$MODEL_ROLE" --arg error "$msg" '{error:$error, model:$model, role:$role, endpoint_attempted:"/api/generate", recommended_endpoint:"/api/embed", result_state:"UNSUPPORTED"}' >"$raw_file"
   jq -n --arg model "$MODEL" --arg role "$MODEL_ROLE" '{model:$model, role:$role, reason:"generation benchmark preflight refused embedding-only model"}' >"$payload_file"
   printf '200' >"$http_file"
   : >"$stderr_file"
@@ -943,7 +1083,7 @@ record_unsupported_generate_preflight() {
 ensure_generation_supported_or_exit() {
   if [[ "$EMBEDDING_MODE" == "1" ]]; then return 0; fi
   if ollama_model_role_is_embedding_only "$MODEL_ROLE"; then
-    log "SKIP generation tests: model=$MODEL role=$MODEL_ROLE does not support /api/generate"
+    log "UNSUPPORTED generation benchmark: model=$MODEL role=$MODEL_ROLE does not support /api/generate"
     record_unsupported_generate_preflight
     snapshot_before_after after
     capture_dmesg_gpu_errors
@@ -961,18 +1101,20 @@ ensure_generation_supported_or_exit() {
 run_embedding_suite() {
   local sanity_input batch_input long_input rag_input
   sanity_input="$(jq -Rn --arg s "RTX 3090 embedding test for RAG retrieval." '$s')"
-  batch_input="$(jq -nc '[range(0;32) | "RTX 3090 local RAG chunk " + tostring + ": Ollama /api/embed vector generation for code search, MCP tools, and ADLC retrieval."]')"
+  batch_input="$(jq -nc '[range(0;32) | "RTX 3090 Ollama embedding batch chunk " + tostring + ": local RAG retrieval, code search, WSL2 CUDA telemetry, prompt ingestion, and vector indexing baseline."]')"
   long_input="$(make_long_prompt "$LONG_PROMPT_WORDS" | jq -Rs .)"
   rag_input="$(jq -nc '[
-    "function buildPayload(model, input) { return { model, input, keep_alive: \"30m\" }; }",
-    "README excerpt: local agent workflows combine Cursor chat, MCP tool calls, embeddings, and generation under WSL2.",
-    "Troubleshooting note: PCIe Gen3 x8 affects model loading and offload more than resident decode once weights are in VRAM.",
-    "Design note: embedding throughput should report vectors per second and prompt tokens per second separately."
+    "Repository README chunk: ollama-info validates local RTX 3090 Ollama generation, embedding, telemetry, and package evidence.",
+    "Code chunk: run_generate records TTFT, prompt_eval_count, eval_count, visible answer length, and sample status for ranking.",
+    "Documentation chunk: embedding models must use /api/embed and report vector count, vector dimension, tokens per second, and embeddings per second.",
+    "Issue chunk: cold load is named FirstReqLoad unless model absence is verified before the first request.",
+    "Operations chunk: PCIe Gen3 x8 is a warning for load/offload/concurrency, not automatic resident decode failure.",
+    "Agentic workflow chunk: concurrency 1, 2, and 4 should be inspected for p50/p95 latency and throughput collapse."
   ]')"
   TEST_STEP=$((TEST_STEP + 1)); run_embed "embedding_sanity" "01_embed_sanity" "$MODEL" "$NUM_CTX" "$sanity_input" "$TEST_STEP"
   TEST_STEP=$((TEST_STEP + 1)); run_embed "embedding_batch" "02_embed_batch" "$MODEL" "$NUM_CTX" "$batch_input" "$TEST_STEP"
   TEST_STEP=$((TEST_STEP + 1)); run_embed "embedding_longctx" "03_embed_longctx" "$MODEL" "$LONG_CTX" "$long_input" "$TEST_STEP"
-  TEST_STEP=$((TEST_STEP + 1)); run_embed "embedding_rag" "04_embed_rag_profile" "$MODEL" "$NUM_CTX" "$rag_input" "$TEST_STEP"
+  TEST_STEP=$((TEST_STEP + 1)); run_embed "embedding_rag_profile" "04_embed_rag_profile" "$MODEL" "$NUM_CTX" "$rag_input" "$TEST_STEP"
 }
 
 with_prefix() { if [[ -n "$PROMPT_PREFIX" ]]; then printf '%s\n%s' "$PROMPT_PREFIX" "$1"; else printf '%s' "$1"; fi; }
@@ -1035,25 +1177,38 @@ make_summary_md() {
     echo "- signature: $SCRIPT_SIGNATURE"
     echo "- run_id: $RUN_ID"
     echo "- model: $MODEL"
+    echo "- model_role: $MODEL_ROLE"
+    echo "- mode: $([[ "$EMBEDDING_MODE" == "1" ]] && echo embedding || echo generation)"
     echo "- base_url: $BASE_URL"
     echo "- think: $THINK"
+    echo "- stream_generation: $STREAM_GENERATION"
+    echo "- load_mode: $LOAD_MODE"
+    echo "- cold_verified: $COLD_VERIFIED"
     echo "- run_dir: $RUN_DIR"
     echo "- archive: ${ARCHIVE_PATH:-pending}"; echo
+    echo "## Load-state semantics"; echo '```text'; cat "$LOAD_STATE_FILE" 2>/dev/null || true; echo '```'; echo
     echo "## Classified metrics"; echo
-    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" '
+    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
       {
-        rows++; cat=col("category"); mode=col("mode"); conc=col("concurrency"); err=col("error"); gen=col("gen_tps")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; endpoint=col("endpoint");
-        if(err!="")errors++;
-        if(mode=="EMBED" || endpoint=="/api/embed" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_err=err; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}}
-        else {gen_rows++; if(resp>0)visible++; if(resp==0&&think>0)thinkonly++; if(cat=="sanity" && load>cold) cold=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0){warmn++; warmsum+=gen}; if(cat=="longctx"){long_seen=1; long_err=err; longgen=gen; longpe=pe; longctx=ctx; longfill=fill}}
+        rows++; cat=col("category"); mode=col("mode"); endpoint=col("endpoint"); conc=col("concurrency"); err=col("error"); state=col("result_state"); sample=col("sample_status"); gen=col("decode_tps_raw")+0; vis=col("visible_answer_tps")+0; load=col("load_s")+0; total=col("total_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; eval=col("eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; ttfa=col("ttft_any_ms")+0; ttfans=col("ttft_answer_ms")+0; e2e500=col("end_to_end_500_ms")+0;
+        if(state=="UNSUPPORTED") unsupported++;
+        if(err!="" && state!="UNSUPPORTED") errors++;
+        if(sample=="SHORT_SAMPLE") short_samples++;
+        if(sample=="UNDERFILLED") underfilled++;
+        if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) thinkonly++; if(cat=="sanity" && load>first_load) first_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warmn++; warmsum+=vis}; if(cat=="longctx"){long_seen=1; longgen=gen; longvis=vis; longpe=pe; longctx=ctx; longfill=fill; longsample=sample}; if(ttfa>0){ttfa_n++; ttfa_sum+=ttfa}; if(ttfans>0){ttfans_n++; ttfans_sum+=ttfans}; if(e2e500>0){e2e_n++; e2e_sum+=e2e500}}
       }
       END{
-        printf "- status_basis: rows=%d errors=%d visible=%d thinking_only=%d embedding_rows=%d\n", rows, errors, visible, thinkonly, embed_rows;
-        if(embed_rows>0 && gen_rows==0){ if(embed_tps_n>0) printf "- embedding: vectors=%d dim=%d rows_ok=%d avg_embeddings_per_s=%.2f\n", embed_vectors, embed_dim, embed_ok, embed_tps_sum/embed_tps_n; else printf "- embedding: vectors=%d dim=%d rows_ok=%d\n", embed_vectors, embed_dim, embed_ok; if(elong_seen && elong_err=="") printf "- embedding_long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% verdict=%s\n", elong_pe, elong_ctx, elong_fill, (elong_fill>=minfill?"OK":"UNDERFILLED"); else if(elong_seen) print "- embedding_long_context: N/A request failed before prompt evaluation"; }
-        else { if(warmn>0) printf "- warm_single_gpu_tps_avg: %.2f across %d rows\n", warmsum/warmn, warmn; printf "- first_request_load_duration_s: %.2f\n", cold; if(long_seen && long_err=="") printf "- long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% gen_tps=%.2f verdict=%s\n", longpe, longctx, longfill, longgen, (longfill>=minfill?"OK":"UNDERFILLED"); else if(long_seen) print "- long_context: N/A request failed before prompt evaluation"; else print "- long_context: N/A long-context row not run"; }
+        printf "- status_basis: rows=%d errors=%d unsupported=%d short_samples=%d underfilled=%d visible_rows=%d thinking_only=%d embedding_rows=%d\n", rows, errors, unsupported, short_samples, underfilled, visible, thinkonly, embed_rows;
+        if(unsupported>0){print "- result_state: UNSUPPORTED generation benchmark for selected model role"}
+        else if(errors>0){print "- result_state: FAIL"}
+        else if(short_samples>0 || underfilled>0){print "- result_state: PASS_WITH_WARNINGS"}
+        else {print "- result_state: PASS"}
+        if(embed_rows>0 && gen_rows==0){ if(embed_tps_n>0) printf "- embedding: vectors=%d dim=%d rows_ok=%d avg_embeddings_per_s=%.2f\n", embed_vectors, embed_dim, embed_ok, embed_tps_sum/embed_tps_n; else printf "- embedding: vectors=%d dim=%d rows_ok=%d\n", embed_vectors, embed_dim, embed_ok; if(elong_seen) printf "- embedding_long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% sample_status=%s\n", elong_pe, elong_ctx, elong_fill, elong_sample; }
+        else { if(warmn>0) printf "- warm_visible_answer_tps_avg: %.2f across %d OK rows\n", warmsum/warmn, warmn; else print "- warm_visible_answer_tps_avg: N/A; no OK visible-answer warm rows"; printf "- first_request_load_s: %.2f\n", first_load; printf "- cold_verified: %s\n", cold; if(ttfa_n>0) printf "- ttft_any_ms_avg: %.1f\n", ttfa_sum/ttfa_n; if(ttfans_n>0) printf "- ttft_answer_ms_avg: %.1f\n", ttfans_sum/ttfans_n; if(e2e_n>0) printf "- end_to_end_500_ms_est_avg: %.1f\n", e2e_sum/e2e_n; if(long_seen) printf "- long_context: prompt_eval_tokens=%d ctx=%d fill=%.1f%% decode_tps_raw=%.2f visible_answer_tps=%.2f sample_status=%s\n", longpe, longctx, longfill, longgen, longvis, longsample; }
       }' "$SUMMARY_CSV"
     if [[ -s "$CONC_AGG_CSV" ]]; then echo; echo "## Concurrency aggregate"; echo '```csv'; cat "$CONC_AGG_CSV"; echo '```'; fi
     if [[ -s "$SOAK_SUMMARY_CSV" ]]; then echo; echo "## Soak aggregate"; echo '```csv'; cat "$SOAK_SUMMARY_CSV"; echo '```'; fi
@@ -1062,14 +1217,16 @@ make_summary_md() {
     echo "- API version: $API_VERSION_FILE"
     echo "- API tags: $API_TAGS_FILE"
     echo "- API show model: $API_SHOW_FILE"
+    echo "- load state: $LOAD_STATE_FILE"
     echo "- ollama show/list: $OLLAMA_SHOW_FILE"
     echo "- WSL diagnostics: $WSL_DIAG"
     echo "- Ollama server log tail: $SERVER_LOG_TAIL"
     echo; echo "## Test results"; echo
     awk -F',' '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
+      function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-      {test=unq($(h["test"])); cat=unq($(h["category"])); mode=unq($(h["mode"])); endpoint=unq($(h["endpoint"])); ctx=unq($(h["num_ctx"])); np=unq($(h["num_predict"])); reason=unq($(h["done_reason"])); err=unq($(h["error"])); http=unq($(h["http_code"])); cls=unq($(h["error_class"])); body=unq($(h["error_body"])); gen=unq($(h["gen_tps"])); eval=unq($(h["eval_tokens"])); prompt=unq($(h["prompt_eval_tokens"])); fill=unq($(h["context_fill_pct"])); total=unq($(h["total_s"])); vec=unq($(h["vector_count"])); dim=unq($(h["vector_dim"])); gsub(/[|]/,"/",body); if(length(body)>160) body=substr(body,1,157)"..."; if(NR==2){print "| Test | Category | Endpoint | Mode | Ctx | Predict | Prompt tok | Fill % | Eval tok | Gen tok/s | Vectors | Dim | Total s | HTTP | Class | Done/Error body |"; print "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"}; if(gen!="") gen=sprintf("%.2f", gen); if(total!="") total=sprintf("%.2f", total); if(fill!="") fill=sprintf("%.1f", fill); final=(body!=""?body:reason); if(cls=="") cls=err; printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", test, cat, endpoint, mode, ctx, np, prompt, fill, eval, gen, vec, dim, total, http, cls, final}
+      {test=col("test"); cat=col("category"); endpoint=col("endpoint"); state=col("result_state"); sample=col("sample_status"); ctx=col("num_ctx"); np=col("num_predict"); prompt=col("prompt_eval_tokens"); fill=col("context_fill_pct"); eval=col("eval_tokens"); raw=col("decode_tps_raw"); vis=col("visible_answer_tps"); any=col("ttft_any_ms"); ans=col("ttft_answer_ms"); vec=col("vector_count"); dim=col("vector_dim"); http=col("http_code"); cls=col("error_class"); if(NR==2){print "| Test | Category | Endpoint | State | Sample | Ctx | Predict | Prompt tok | Fill % | Eval tok | Decode tok/s | Visible tok/s | TTFT any ms | TTFT answer ms | Vectors | Dim | HTTP | Class |"; print "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"}; if(raw!="") raw=sprintf("%.2f", raw); if(vis!="") vis=sprintf("%.2f", vis); if(fill!="") fill=sprintf("%.1f", fill); printf "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", test, cat, endpoint, state, sample, ctx, np, prompt, fill, eval, raw, vis, any, ans, vec, dim, http, cls}
     ' "$SUMMARY_CSV"
     echo; echo "## Ollama loaded models after test"; echo '```text'; cat "$RUN_DIR/ollama-ps-after.txt" 2>/dev/null || true; echo '```'
     echo; echo "## NVIDIA snapshot after test"; echo '```text'; cat "$RUN_DIR/nvidia-smi-after.txt" 2>/dev/null || true; echo '```'
@@ -1088,35 +1245,39 @@ make_terminal_summary() {
     echo "Mode    : $([[ "$EMBEDDING_MODE" == "1" ]] && echo embedding || echo generation)"
     echo "API     : $BASE_URL"
     echo "Think   : $THINK"
-    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" '
+    echo "Stream  : $STREAM_GENERATION"
+    awk -F',' -v minfill="$LONG_CONTEXT_MIN_FILL_PCT" -v cold="$COLD_VERIFIED" '
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
       {
-        rows++; cat=col("category"); mode=col("mode"); conc=col("concurrency"); err=col("error"); cls=col("error_class"); gen=col("gen_tps")+0; total=col("total_s")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; embtps=col("embed_tokens_per_s")+0; sample=col("sample_status"); ttfta=col("ttft_any_ms"); ttftans=col("ttft_answer_ms"); e2e500=col("end_to_end_500_ms");
-        if(err!="") errors++;
-        if(cls=="unsupported_generate_for_embedding_model") unsupported=1;
+        rows++; cat=col("category"); mode=col("mode"); endpoint=col("endpoint"); conc=col("concurrency"); err=col("error"); cls=col("error_class"); state=col("result_state"); sample=col("sample_status"); gen=col("decode_tps_raw")+0; vis=col("visible_answer_tps")+0; total=col("total_s")+0; load=col("load_s")+0; resp=col("response_chars")+0; think=col("thinking_chars")+0; pe=col("prompt_eval_tokens")+0; eval=col("eval_tokens")+0; ctx=col("num_ctx")+0; fill=col("context_fill_pct")+0; vc=col("vector_count")+0; vd=col("vector_dim")+0; etps=col("embedding_tps")+0; any=col("ttft_any_ms")+0; ans=col("ttft_answer_ms")+0; e2e=col("end_to_end_500_ms")+0;
+        if(state=="UNSUPPORTED") unsupported++;
+        if(err!="" && state!="UNSUPPORTED") errors++;
         if(sample=="SHORT_SAMPLE") short_samples++;
-        if(mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(err=="") embed_ok++; if(cat=="embedding_longctx"){elong_seen=1; elong_err=err; elong_pe=pe; elong_ctx=ctx; elong_fill=fill}}
-        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>cold_load)cold_load=load; if(ttfta!=""){ttfta_n++; ttfta_sum+=ttfta}; if(ttftans!=""){ttftans_n++; ttftans_sum+=ttftans}; if(e2e500!=""){e2e_n++; e2e_sum+=e2e500}; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&gen>0&&sample!="SHORT_SAMPLE"){warm_n++; warm_sum+=gen; if(warm_n==1||gen>warm_max)warm_max=gen; if(warm_n==1||gen<warm_min)warm_min=gen}; if(cat=="longctx"){long_seen=1; long_err=err; long_gen=gen; long_fill=fill; long_pe=pe; long_ctx=ctx}}
+        if(sample=="UNDERFILLED") underfilled++;
+        if(endpoint=="/api/embed" || mode=="EMBED" || cat ~ /^embedding/) {embed_rows++; embed_vectors+=vc; if(vd>0) embed_dim=vd; if(err=="") embed_ok++; if(etps>0){embed_tps_n++; embed_tps_sum+=etps}; if(cat=="embedding_longctx"){elong_seen=1; elong_fill=fill; elong_pe=pe; elong_ctx=ctx; elong_sample=sample}}
+        else {gen_rows++; if(resp>0) visible++; if(resp==0&&think>0) think_only++; if(cat=="sanity" && load>first_load) first_load=load; if(mode=="GPU"&&conc==1&&err==""&&(cat=="throughput"||cat=="sustained")&&sample=="OK"&&vis>0){warm_n++; warm_sum+=vis; if(warm_n==1||vis>warm_max)warm_max=vis; if(warm_n==1||vis<warm_min)warm_min=vis}; if(cat=="longctx"){long_seen=1; long_gen=gen; long_vis=vis; long_fill=fill; long_pe=pe; long_ctx=ctx; long_sample=sample}; if(any>0){any_n++; any_sum+=any}; if(ans>0){ans_n++; ans_sum+=ans}; if(e2e>0){e2e_n++; e2e_sum+=e2e}}
         if(total>max_total)max_total=total
       }
       END{
-        status=(unsupported?"UNSUPPORTED":(errors>0?"FAIL":(short_samples>0||think_only>0?"PASS_WITH_WARNINGS":"PASS"))); printf "Status  : %s\n", status;
+        if(unsupported>0) status="UNSUPPORTED"; else if(errors>0) status="FAIL"; else if(short_samples>0||underfilled>0) status="PASS_WITH_WARNINGS"; else status="PASS";
+        printf "Status  : %s\n", status;
         if(embed_rows>0 && gen_rows==0){
-          if(embed_tps_n>0) printf "Embed   : vectors=%d dim=%d rows=%d ok=%d avg=%.2f EPS\n", embed_vectors, embed_dim, embed_rows, embed_ok, embed_tps_sum/embed_tps_n; else printf "Embed   : vectors=%d dim=%d rows=%d ok=%d\n", embed_vectors, embed_dim, embed_rows, embed_ok;
-          if(elong_seen && elong_err=="") printf "LongEmb : prompt_tokens=%d ctx=%d fill=%.1f%% %s\n", elong_pe, elong_ctx, elong_fill, (elong_fill>=minfill?"OK":"UNDERFILLED"); else if(elong_seen) print "LongEmb : N/A; request failed before prompt evaluation"; else print "LongEmb : N/A; embedding long-context row not run";
+          if(embed_tps_n>0) printf "Embed   : vectors=%d dim=%d rows=%d ok=%d avg=%.2f embeds/s\n", embed_vectors, embed_dim, embed_rows, embed_ok, embed_tps_sum/embed_tps_n; else printf "Embed   : vectors=%d dim=%d rows=%d ok=%d\n", embed_vectors, embed_dim, embed_rows, embed_ok;
+          if(elong_seen) printf "LongEmb : prompt_tokens=%d ctx=%d fill=%.1f%% %s\n", elong_pe, elong_ctx, elong_fill, elong_sample; else print "LongEmb : N/A; embedding long-context row not run";
           printf "Output  : embedding rows %d/%d; errors %d\n", embed_ok, embed_rows, errors;
           if(errors==0) print "Inference: PASS; completed embedding benchmark"; else print "Inference: INCONCLUSIVE; embedding benchmark did not complete cleanly";
+        } else if(unsupported>0) {
+          print "Inference: UNSUPPORTED; selected model role does not support /api/generate";
         } else {
-          if(warm_n>0) printf "Warm    : single GPU %.2f tok/s avg (%.2f-%.2f), rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no valid warm single GPU rows";
-          printf "FirstReqLoad: %.2fs Ollama load_duration; not verified disk-cold\n", cold_load;
-          if("'"$COLD_VERIFIED"'"=="1") print "Cold verified: model absent before first request";
-          if(ttfta_n>0 || ttftans_n>0 || e2e_n>0) printf "Latency : ttft_any_ms=%s ttft_answer_ms=%s end_to_end_500_ms=%s\n", (ttfta_n?sprintf("%.1f",ttfta_sum/ttfta_n):"N/A"), (ttftans_n?sprintf("%.1f",ttftans_sum/ttftans_n):"N/A"), (e2e_n?sprintf("%.1f",e2e_sum/e2e_n):"N/A");
-          if(long_seen && long_err=="") printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% gen=%.2f tok/s %s\n", long_pe, long_ctx, long_fill, long_gen, (long_fill>=minfill?"OK":"UNDERFILLED"); else if(long_seen) print "LongCtx : N/A; request failed before prompt evaluation"; else print "LongCtx : N/A; long-context row not run";
-          printf "Output  : visible rows %d/%d; thinking-only %d; short-sample %d; errors %d\n", visible, rows, think_only, short_samples, errors;
-          if(unsupported) print "Inference: UNSUPPORTED; embedding-only model was not generation-tested"; else if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
-          if(errors>0 && visible==0) print "Verdict : benchmark INCONCLUSIVE; model never produced usable tokens";
+          if(warm_n>0) printf "Warm    : visible-answer %.2f tok/s avg (%.2f-%.2f), OK rows %d\n", warm_sum/warm_n, warm_min, warm_max, warm_n; else print "Warm    : no OK visible-answer warm rows";
+          printf "FirstReqLoad: %.2fs; ColdVerified=%s; max total %.2fs\n", first_load, cold, max_total;
+          if(any_n>0) printf "TTFT    : any %.1f ms avg; answer %s\n", any_sum/any_n, (ans_n>0?sprintf("%.1f ms avg", ans_sum/ans_n):"N/A"); else print "TTFT    : N/A; streaming metrics unavailable";
+          if(e2e_n>0) printf "E2E500  : %.1f ms estimated avg\n", e2e_sum/e2e_n;
+          if(long_seen) printf "LongCtx : prompt_tokens=%d ctx=%d fill=%.1f%% decode=%.2f visible=%.2f %s\n", long_pe, long_ctx, long_fill, long_gen, long_vis, long_sample; else print "LongCtx : N/A; long-context row not run";
+          printf "Output  : visible rows %d/%d; thinking-only %d; errors %d; short=%d underfilled=%d\n", visible, rows, think_only, errors, short_samples, underfilled;
+          if(errors==0 && visible>0) print "Inference: PASS; completed generation benchmark"; else print "Inference: NOT TESTED; model did not produce usable generation tokens";
         }
       }' "$SUMMARY_CSV"
     if [[ -s "$FAILURE_HINTS" ]] && ! grep -q '^primary_error_class=none$' "$FAILURE_HINTS"; then
@@ -1133,9 +1294,9 @@ make_terminal_summary() {
       function unq(s){gsub(/^"|"$/, "", s); gsub(/""/, "\"", s); return s}
       function col(n){return (h[n] ? unq($(h[n])) : "")}
       NR==1{for(i=1;i<=NF;i++) h[unq($i)]=i; next}
-      NR<=13{test=col("test"); cat=col("category"); mode=col("mode"); ctx=col("num_ctx"); gen=col("gen_tps"); prompt=col("prompt_eval_tokens"); done=col("done_reason"); cls=col("error_class"); http=col("http_code"); vec=col("vector_count"); dim=col("vector_dim"); if(gen!="") gen=sprintf("%.2f", gen); suffix=(cls!=""?"http="http" "cls:done); if(mode=="EMBED"||cat~/^embedding/) printf "  %-18s %-16s %3s ctx=%-5s prompt=%-5s vec=%-4s dim=%-5s %s\n", test, cat, mode, ctx, prompt, vec, dim, suffix; else printf "  %-18s %-10s %3s ctx=%-5s prompt=%-5s gen=%6s %s\n", test, cat, mode, ctx, prompt, gen, suffix}
+      NR<=13{test=col("test"); cat=col("category"); mode=col("mode"); ctx=col("num_ctx"); raw=col("decode_tps_raw"); vis=col("visible_answer_tps"); prompt=col("prompt_eval_tokens"); sample=col("sample_status"); state=col("result_state"); cls=col("error_class"); http=col("http_code"); vec=col("vector_count"); dim=col("vector_dim"); any=col("ttft_any_ms"); ans=col("ttft_answer_ms"); if(raw!="") raw=sprintf("%.2f", raw); if(vis!="") vis=sprintf("%.2f", vis); suffix=(cls!=""?"http="http" "cls:state"/"sample); if(mode=="EMBED"||cat~/^embedding/) printf "  %-18s %-18s ctx=%-5s prompt=%-5s vec=%-4s dim=%-5s %s\n", test, cat, ctx, prompt, vec, dim, suffix; else printf "  %-18s %-10s ctx=%-5s prompt=%-5s raw=%6s vis=%6s ttft=%s/%s %s\n", test, cat, ctx, prompt, raw, vis, any, ans, suffix}
       NR==14{print "  ... additional rows omitted from terminal summary; see summary.csv"}' "$SUMMARY_CSV"
-    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; echo "  hint: $FAILURE_HINTS"; echo "  log : $SERVER_LOG_TAIL"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
+    echo "Files:"; echo "  run : $RUN_DIR"; echo "  md  : $SUMMARY_MD"; echo "  csv : $SUMMARY_CSV"; echo "  load: $LOAD_STATE_FILE"; echo "  hint: $FAILURE_HINTS"; echo "  log : $SERVER_LOG_TAIL"; if [[ -n "${ARCHIVE_PATH:-}" ]]; then echo "  zip : $ARCHIVE_PATH"; fi
     echo "============================================================"
   } >"$TERMINAL_SUMMARY"
 }
@@ -1164,7 +1325,7 @@ ensure_model "$MODEL"
 if [[ "$RUN_VRAM_PRESSURE" == "1" ]]; then ensure_model "${VRAM_MODEL:-$MODEL}"; fi
 collect_preflight_diagnostics
 snapshot_before_after before
-verify_cold_precondition
+assess_load_state
 write_meta
 capture_dmesg_cursor
 ensure_generation_supported_or_exit
@@ -1190,7 +1351,7 @@ else
   if [[ "$RUN_VRAM_PRESSURE" == "1" ]]; then PLANNED_TESTS=$((PLANNED_TESTS + 1)); fi
 fi
 TEST_STEP=0
-log "Test plan: model=$MODEL role=$MODEL_ROLE embedding=$EMBEDDING_MODE think=$THINK tests=$PLANNED_TESTS ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
+log "Test plan: model=$MODEL role=$MODEL_ROLE embedding=$EMBEDDING_MODE think=$THINK stream=$STREAM_GENERATION load_mode=$LOAD_MODE cold_verified=$COLD_VERIFIED tests=$PLANNED_TESTS ctx=$NUM_CTX long_ctx=$LONG_CTX long_prompt_words=$LONG_PROMPT_WORDS predict=$NUM_PREDICT long_predict=$LONG_NUM_PREDICT concurrency=$CONCURRENCY run_conc=$RUN_CONC run_cpu=$RUN_CPU soak_minutes=$SOAK_MINUTES run_vram_pressure=$RUN_VRAM_PRESSURE"
 
 if [[ "$EMBEDDING_MODE" == "1" ]]; then
   run_embedding_suite

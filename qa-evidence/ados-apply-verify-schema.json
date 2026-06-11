@@ -1,0 +1,2158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qobeat.example/schemas/ados-apply-verify-ledger-5.2.0.schema.json",
+  "title": "ADOS Apply/Verify Evidence Ledger Row",
+  "description": "Validates one JSONL row from qa-evidence/evidence-ledger.jsonl and typed Apply/Verify records.",
+  "$ref": "#/$defs/EvidenceLedgerRow",
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "MarkdownText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]*$"
+    },
+    "RefArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Id"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "OptionalRefArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Id"
+      },
+      "uniqueItems": true
+    },
+    "Path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\.\\.).+$"
+    },
+    "Uri": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "Verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "skip",
+        "blocked",
+        "not_applicable"
+      ]
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "planned",
+        "scheduled",
+        "running",
+        "verified",
+        "accepted",
+        "rejected",
+        "failed",
+        "skipped",
+        "halted",
+        "packaged",
+        "needs_review"
+      ]
+    },
+    "Priority": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "core",
+        "normal",
+        "non-critical"
+      ]
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "Axis": {
+      "type": "string",
+      "enum": [
+        "Document",
+        "Glossary",
+        "Skill",
+        "Prompt",
+        "Delivery",
+        "Project",
+        "Pass",
+        "Iteration",
+        "Build",
+        "Zip",
+        "Governance"
+      ]
+    },
+    "FileRole": {
+      "type": "string",
+      "enum": [
+        "Schema",
+        "Runtime Contract",
+        "ARD Template",
+        "Surface Map",
+        "Axis Contract",
+        "Project Skill",
+        "Glossary Skill",
+        "Pass Skill",
+        "Zip Skill",
+        "Skill Plane",
+        "Requirements Contract",
+        "Evidence Ledger",
+        "Delivery Artifact",
+        "Visual Diagram"
+      ]
+    },
+    "SkillId": {
+      "type": "string",
+      "enum": [
+        "SK-AV-001",
+        "SK-AV-002",
+        "SK-AV-003",
+        "SK-AV-004",
+        "SK-AV-005",
+        "SK-AV-006",
+        "SK-AV-007",
+        "SK-AV-008",
+        "SK-AV-009",
+        "SK-AV-010",
+        "SK-AV-011",
+        "SK-AV-012",
+        "SK-AV-013",
+        "SK-AV-014",
+        "SK-AV-015",
+        "SK-AV-016"
+      ]
+    },
+    "Archetype": {
+      "type": "string",
+      "enum": [
+        "skill_contract",
+        "atomic_requirements",
+        "routing_governance",
+        "evaluation_rubric",
+        "schema_data_contract",
+        "execution_flow",
+        "package_delivery",
+        "architecture_governance",
+        "documentation_synthesis",
+        "research_grounded_spec",
+        "code_or_repo_patch",
+        "evidence_model",
+        "migration_refactor",
+        "prompt_or_directive",
+        "visual_process_model"
+      ]
+    },
+    "Domain": {
+      "type": "string",
+      "enum": [
+        "ados_apply_verify_skill",
+        "ados_bootstrap_package",
+        "atomic_requirement_engineering",
+        "agentic_evaluation",
+        "schema_bound_execution",
+        "architecture_governance",
+        "agent_skill_interoperability",
+        "mcp_tool_boundary",
+        "repo_package_hardening",
+        "publication_quality_delivery",
+        "visual_governance_modeling",
+        "custom_domain"
+      ]
+    },
+    "EvidenceType": {
+      "type": "string",
+      "enum": [
+        "user_request",
+        "project_info",
+        "source",
+        "goal",
+        "objective",
+        "alignment",
+        "intent",
+        "intent_part",
+        "routing_decision",
+        "rejected_intent_part",
+        "requirement",
+        "atomic_claim",
+        "atomic_requirement",
+        "file",
+        "skill_definition",
+        "skill_call",
+        "archetype_profile",
+        "domain_profile",
+        "schema_contract",
+        "atomic_work",
+        "intent_delivery",
+        "essay",
+        "semantic_diff",
+        "verification",
+        "evaluation_procedure",
+        "evaluation",
+        "repair",
+        "halt",
+        "risk",
+        "guard",
+        "flow_state",
+        "governance_decision",
+        "finalization",
+        "package_manifest",
+        "telemetry"
+      ]
+    },
+    "HaltCode": {
+      "type": "string",
+      "enum": [
+        "HALT_AMBIGUOUS_GOAL",
+        "HALT_MISSING_PROJECT_BLOCK",
+        "HALT_ARCHETYPE_UNSUPPORTED",
+        "HALT_DOMAIN_TOO_BROAD",
+        "HALT_LOGICAL_GAP",
+        "HALT_EVALUATION_UNDEFINED",
+        "HALT_MISSING_REQUIRED_INPUT",
+        "HALT_SCHEMA_INVALID",
+        "HALT_REPAIR_LIMIT_EXCEEDED",
+        "WAIT_USER_APPROVAL",
+        "HALT_UNAUTHORIZED_MUTATION"
+      ]
+    },
+    "RoutingVerdict": {
+      "type": "string",
+      "enum": [
+        "accepted_requirement",
+        "accepted_governance_requirement",
+        "governance_review",
+        "rejected_part",
+        "needs_clarification"
+      ]
+    },
+    "GoalDirection": {
+      "type": "string",
+      "enum": [
+        "toward",
+        "neutral",
+        "away"
+      ]
+    },
+    "Modality": {
+      "type": "string",
+      "enum": [
+        "MUST",
+        "SHOULD",
+        "MAY",
+        "MUST_NOT",
+        "FACT",
+        "ASSUMPTION"
+      ]
+    },
+    "OracleType": {
+      "type": "string",
+      "enum": [
+        "schema_validation",
+        "command_output",
+        "semantic_diff",
+        "structured_judgment",
+        "human_review",
+        "source_citation",
+        "not_applicable"
+      ]
+    },
+    "Score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "UserRequest": {
+      "type": "object",
+      "required": [
+        "request_id",
+        "raw_request",
+        "normalized_request"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "raw_request": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "normalized_request": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "attachment_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProjectInfo": {
+      "type": "object",
+      "required": [
+        "project_slug",
+        "project_version",
+        "package_name",
+        "allowed_scope",
+        "do_not_edit_scope"
+      ],
+      "properties": {
+        "project_slug": {
+          "const": "ados-apply-verify"
+        },
+        "project_version": {
+          "type": "string"
+        },
+        "repo_url": {
+          "type": "string"
+        },
+        "package_name": {
+          "$ref": "#/$defs/Path"
+        },
+        "allowed_scope": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          }
+        },
+        "do_not_edit_scope": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Source": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "source_type",
+        "locator",
+        "trust_tier",
+        "summary"
+      ],
+      "properties": {
+        "source_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "uploaded_file",
+            "repo_file",
+            "official_doc",
+            "research",
+            "web",
+            "generated_artifact"
+          ]
+        },
+        "locator": {
+          "$ref": "#/$defs/Uri"
+        },
+        "trust_tier": {
+          "type": "string",
+          "enum": [
+            "source_of_truth",
+            "primary",
+            "secondary",
+            "context"
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/MarkdownText"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Goal": {
+      "type": "object",
+      "required": [
+        "goal_id",
+        "statement",
+        "durability",
+        "status"
+      ],
+      "properties": {
+        "goal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "durability": {
+          "const": "durable_long_lasting"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Objective": {
+      "type": "object",
+      "required": [
+        "objective_id",
+        "goal_id",
+        "statement",
+        "objective_type",
+        "durability",
+        "priority",
+        "status"
+      ],
+      "properties": {
+        "objective_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "goal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "objective_type": {
+          "type": "string",
+          "enum": [
+            "material",
+            "non_material",
+            "governance"
+          ]
+        },
+        "durability": {
+          "const": "durable_long_lasting"
+        },
+        "priority": {
+          "$ref": "#/$defs/Priority"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Alignment": {
+      "type": "object",
+      "required": [
+        "alignment_id",
+        "goal_id",
+        "statement",
+        "protects"
+      ],
+      "properties": {
+        "alignment_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "goal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "objective_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "protects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "Intent": {
+      "type": "object",
+      "required": [
+        "intent_id",
+        "user_request_id",
+        "statement",
+        "request_local",
+        "status"
+      ],
+      "properties": {
+        "intent_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "user_request_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "request_local": {
+          "const": true
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IntentPart": {
+      "type": "object",
+      "required": [
+        "intent_part_id",
+        "intent_id",
+        "part_no",
+        "statement",
+        "status"
+      ],
+      "properties": {
+        "intent_part_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intent_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "part_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RoutingDecision": {
+      "type": "object",
+      "required": [
+        "routing_id",
+        "intent_id",
+        "intent_part_id",
+        "goal_alignment_direction",
+        "goal_alignment_angle",
+        "objective_area_coverage",
+        "objective_uncovered_area",
+        "verdict",
+        "rationale"
+      ],
+      "properties": {
+        "routing_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intent_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intent_part_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "goal_alignment_direction": {
+          "$ref": "#/$defs/GoalDirection"
+        },
+        "goal_alignment_angle": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "objective_area_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "objective_uncovered_area": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "thresholds": {
+          "type": "object",
+          "properties": {
+            "goal_alignment_angle_threshold": {
+              "type": "number"
+            },
+            "objective_uncovered_area_threshold": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "blocker_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verdict": {
+          "$ref": "#/$defs/RoutingVerdict"
+        },
+        "rationale": {
+          "$ref": "#/$defs/MarkdownText"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RejectedIntentPart": {
+      "type": "object",
+      "required": [
+        "rejection_id",
+        "intent_part_id",
+        "routing_id",
+        "reason"
+      ],
+      "properties": {
+        "rejection_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intent_part_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "routing_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "suggested_action": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Requirement": {
+      "type": "object",
+      "required": [
+        "requirement_id",
+        "source_intent_part_id",
+        "routing_id",
+        "requirement_type",
+        "statement",
+        "goal_id",
+        "objective_refs",
+        "status"
+      ],
+      "properties": {
+        "requirement_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "source_intent_part_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "routing_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "requirement_type": {
+          "type": "string",
+          "enum": [
+            "material",
+            "governance",
+            "documentation",
+            "schema",
+            "quality",
+            "packaging"
+          ]
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "goal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "objective_refs": {
+          "$ref": "#/$defs/RefArray"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AtomicClaim": {
+      "type": "object",
+      "required": [
+        "claim_id",
+        "owner_ref",
+        "claim_kind",
+        "subject",
+        "predicate",
+        "object",
+        "condition",
+        "source_refs",
+        "status"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "owner_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "claim_kind": {
+          "type": "string",
+          "enum": [
+            "fact",
+            "assumption",
+            "risk",
+            "decision",
+            "obligation",
+            "definition",
+            "evidence_statement",
+            "essay_claim"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "predicate": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "object": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "source_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AtomicRequirement": {
+      "type": "object",
+      "required": [
+        "atomic_requirement_id",
+        "requirement_id",
+        "modality",
+        "subject",
+        "predicate",
+        "object",
+        "condition",
+        "oracle_type",
+        "evidence_types"
+      ],
+      "properties": {
+        "atomic_requirement_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "requirement_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "modality": {
+          "$ref": "#/$defs/Modality"
+        },
+        "subject": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "predicate": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "object": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "oracle_type": {
+          "$ref": "#/$defs/OracleType"
+        },
+        "evidence_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "GovernedFile": {
+      "type": "object",
+      "required": [
+        "file_id",
+        "path",
+        "file_role",
+        "axis",
+        "goal_id",
+        "objective_refs",
+        "implement_directive",
+        "verify_directive"
+      ],
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "file_role": {
+          "$ref": "#/$defs/FileRole"
+        },
+        "axis": {
+          "$ref": "#/$defs/Axis"
+        },
+        "goal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "objective_refs": {
+          "$ref": "#/$defs/RefArray"
+        },
+        "implement_directive": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "verify_directive": {
+          "$ref": "#/$defs/MarkdownText"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillDefinition": {
+      "type": "object",
+      "required": [
+        "skill_id",
+        "skill_name",
+        "purpose",
+        "allowed_next_skills"
+      ],
+      "properties": {
+        "skill_id": {
+          "$ref": "#/$defs/SkillId"
+        },
+        "skill_name": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "purpose": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "reads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          }
+        },
+        "allowed_next_skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillCall": {
+      "type": "object",
+      "required": [
+        "call_id",
+        "skill_id",
+        "input_refs",
+        "output_rec_types",
+        "verdict"
+      ],
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "skill_id": {
+          "$ref": "#/$defs/SkillId"
+        },
+        "input_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "output_rec_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          }
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ArchetypeProfile": {
+      "type": "object",
+      "required": [
+        "archetype_profile_id",
+        "primary_archetype",
+        "selected_domain",
+        "required_skills",
+        "required_record_types",
+        "verification_focus",
+        "selection_rationale"
+      ],
+      "properties": {
+        "archetype_profile_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "primary_archetype": {
+          "$ref": "#/$defs/Archetype"
+        },
+        "secondary_archetypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Archetype"
+          },
+          "uniqueItems": true
+        },
+        "selected_domain": {
+          "$ref": "#/$defs/Domain"
+        },
+        "required_skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillId"
+          },
+          "minItems": 1
+        },
+        "required_record_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          },
+          "minItems": 1
+        },
+        "required_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          }
+        },
+        "verification_focus": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "quality_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rejection_triggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selection_rationale": {
+          "$ref": "#/$defs/MarkdownText"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DomainProfile": {
+      "type": "object",
+      "required": [
+        "domain_profile_id",
+        "domain",
+        "boundary",
+        "excluded_domains"
+      ],
+      "properties": {
+        "domain_profile_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "domain": {
+          "$ref": "#/$defs/Domain"
+        },
+        "boundary": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "excluded_domains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Domain"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "SchemaContract": {
+      "type": "object",
+      "required": [
+        "schema_id",
+        "path",
+        "draft",
+        "validates_rec_types"
+      ],
+      "properties": {
+        "schema_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "draft": {
+          "const": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "validates_rec_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceType"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "AtomicWork": {
+      "type": "object",
+      "required": [
+        "work_id",
+        "atomic_requirement_refs",
+        "file_id",
+        "implement_directive",
+        "verify_directive",
+        "status"
+      ],
+      "properties": {
+        "work_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "atomic_requirement_refs": {
+          "$ref": "#/$defs/RefArray"
+        },
+        "file_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "implement_directive": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "verify_directive": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IntentDelivery": {
+      "type": "object",
+      "required": [
+        "delivery_id",
+        "intent_id",
+        "requirement_refs",
+        "file_refs",
+        "status"
+      ],
+      "properties": {
+        "delivery_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intent_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "requirement_refs": {
+          "$ref": "#/$defs/RefArray"
+        },
+        "file_refs": {
+          "$ref": "#/$defs/RefArray"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Essay": {
+      "type": "object",
+      "required": [
+        "essay_id",
+        "title",
+        "scope",
+        "claim_refs"
+      ],
+      "properties": {
+        "essay_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "title": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "scope": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "claim_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SemanticDiff": {
+      "type": "object",
+      "required": [
+        "diff_id",
+        "source_ref",
+        "target_ref",
+        "verdict",
+        "drift_class"
+      ],
+      "properties": {
+        "diff_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "target_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "drift_class": {
+          "type": "string",
+          "enum": [
+            "none",
+            "wording_only",
+            "scope_gap",
+            "extra_scope",
+            "contradiction",
+            "unsupported_claim"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Verification": {
+      "type": "object",
+      "required": [
+        "check_id",
+        "target_ref",
+        "method",
+        "verdict"
+      ],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "target_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "method": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "evidence_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvaluationProcedure": {
+      "type": "object",
+      "required": [
+        "procedure_id",
+        "axes",
+        "pass_threshold",
+        "strict_pass_threshold"
+      ],
+      "properties": {
+        "procedure_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "axes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "axis_id",
+              "name",
+              "weight",
+              "mandatory"
+            ],
+            "properties": {
+              "axis_id": {
+                "$ref": "#/$defs/Id"
+              },
+              "name": {
+                "$ref": "#/$defs/NonEmptyString"
+              },
+              "weight": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "mandatory": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "pass_threshold": {
+          "$ref": "#/$defs/Score"
+        },
+        "strict_pass_threshold": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Evaluation": {
+      "type": "object",
+      "required": [
+        "evaluation_id",
+        "procedure_id",
+        "target_ref",
+        "axis_scores",
+        "overall_score",
+        "verdict"
+      ],
+      "properties": {
+        "evaluation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "procedure_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "target_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "axis_scores": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "axis_id",
+              "score",
+              "rationale"
+            ],
+            "properties": {
+              "axis_id": {
+                "$ref": "#/$defs/Id"
+              },
+              "score": {
+                "$ref": "#/$defs/Score"
+              },
+              "rationale": {
+                "$ref": "#/$defs/MarkdownText"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "overall_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Repair": {
+      "type": "object",
+      "required": [
+        "repair_id",
+        "failed_check_ref",
+        "attempt_no",
+        "action",
+        "verdict"
+      ],
+      "properties": {
+        "repair_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "failed_check_ref": {
+          "$ref": "#/$defs/Id"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Halt": {
+      "type": "object",
+      "required": [
+        "halt_id",
+        "halt_code",
+        "reason"
+      ],
+      "properties": {
+        "halt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "halt_code": {
+          "$ref": "#/$defs/HaltCode"
+        },
+        "reason": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "evidence_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Risk": {
+      "type": "object",
+      "required": [
+        "risk_id",
+        "risk_type",
+        "statement",
+        "severity",
+        "mitigation"
+      ],
+      "properties": {
+        "risk_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "risk_type": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "mitigation": {
+          "$ref": "#/$defs/MarkdownText"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Guard": {
+      "type": "object",
+      "required": [
+        "guard_id",
+        "guard_type",
+        "condition",
+        "verdict"
+      ],
+      "properties": {
+        "guard_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "guard_type": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "condition": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FlowState": {
+      "type": "object",
+      "required": [
+        "flow_state_id",
+        "state",
+        "status"
+      ],
+      "properties": {
+        "flow_state_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "Phase:Confirm",
+            "Phase:Plan",
+            "Schedule:Work",
+            "Work:Implement",
+            "Work:Verify",
+            "Step:Reflect",
+            "Step:Pack"
+          ]
+        },
+        "input_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "output_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GovernanceDecision": {
+      "type": "object",
+      "required": [
+        "decision_id",
+        "decision_type",
+        "statement",
+        "approval_status"
+      ],
+      "properties": {
+        "decision_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "decision_type": {
+          "$ref": "#/$defs/NonEmptyString"
+        },
+        "statement": {
+          "$ref": "#/$defs/MarkdownText"
+        },
+        "approval_status": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected",
+            "not_required",
+            "pending"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Finalization": {
+      "type": "object",
+      "required": [
+        "finalization_id",
+        "cleanup_actions",
+        "package_refs",
+        "verdict"
+      ],
+      "properties": {
+        "finalization_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "cleanup_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "package_refs": {
+          "$ref": "#/$defs/OptionalRefArray"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PackageManifest": {
+      "type": "object",
+      "required": [
+        "package_id",
+        "package_name",
+        "package_type",
+        "included_paths",
+        "verdict"
+      ],
+      "properties": {
+        "package_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "package_name": {
+          "$ref": "#/$defs/Path"
+        },
+        "package_type": {
+          "type": "string",
+          "enum": [
+            "delivery",
+            "qa_evidence",
+            "implementation_ready"
+          ]
+        },
+        "included_paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          },
+          "minItems": 1
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/Sha256"
+        },
+        "hash_scope": {
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Telemetry": {
+      "type": "object",
+      "required": [
+        "telemetry_id",
+        "terminal_state",
+        "changed_files",
+        "passed_checks",
+        "failed_checks"
+      ],
+      "properties": {
+        "telemetry_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "terminal_state": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "halted",
+            "needs_review"
+          ]
+        },
+        "changed_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Path"
+          }
+        },
+        "passed_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "failed_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceRecord": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "user_request"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/UserRequest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "project_info"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/ProjectInfo"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "source"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "goal"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Goal"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "objective"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Objective"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "alignment"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Alignment"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "intent"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Intent"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "intent_part"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/IntentPart"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "routing_decision"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/RoutingDecision"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "rejected_intent_part"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/RejectedIntentPart"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "requirement"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Requirement"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "atomic_claim"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/AtomicClaim"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "atomic_requirement"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/AtomicRequirement"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "file"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/GovernedFile"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "skill_definition"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/SkillDefinition"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "skill_call"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/SkillCall"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "archetype_profile"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/ArchetypeProfile"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "domain_profile"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/DomainProfile"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "schema_contract"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/SchemaContract"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "atomic_work"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/AtomicWork"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "intent_delivery"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/IntentDelivery"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "essay"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Essay"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "semantic_diff"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/SemanticDiff"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "verification"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Verification"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "evaluation_procedure"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/EvaluationProcedure"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "evaluation"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Evaluation"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "repair"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Repair"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "halt"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Halt"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "risk"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Risk"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "guard"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Guard"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "flow_state"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/FlowState"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "governance_decision"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/GovernanceDecision"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "finalization"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Finalization"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "package_manifest"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/PackageManifest"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "rec_type",
+            "rec_specific_object"
+          ],
+          "properties": {
+            "rec_type": {
+              "const": "telemetry"
+            },
+            "rec_specific_object": {
+              "$ref": "#/$defs/Telemetry"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "EvidenceLedgerRow": {
+      "type": "object",
+      "required": [
+        "rec_id",
+        "prj_slug",
+        "prj_ver",
+        "record",
+        "notes"
+      ],
+      "properties": {
+        "rec_id": {
+          "type": "string",
+          "pattern": "^EVREC-[0-9]{6}$"
+        },
+        "prj_slug": {
+          "const": "ados-apply-verify"
+        },
+        "prj_ver": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "record": {
+          "$ref": "#/$defs/EvidenceRecord"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

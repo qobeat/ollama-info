@@ -1,0 +1,169 @@
+ollama-info v1.7 final verification
+timestamp=2026-06-11T16:35:53+00:00
+
+== Bash syntax ==
+PASS bash -n scripts/ollama-bench-RTX3090.sh
+PASS bash -n scripts/ollama-common.sh
+PASS bash -n scripts/ollama-download.sh
+PASS bash -n scripts/ollama-embed-test-RTX3090.sh
+PASS bash -n scripts/ollama-monitor.sh
+PASS bash -n scripts/ollama-test-RTX3090.sh
+PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama-start
+PASS bash -n scripts/ollama-stop
+PASS bash -n scripts/ollama-status
+PASS bash -n scripts/ollama-gen
+PASS bash -n scripts/ollama-perf
+PASS bash -n scripts/ollama-perf-table
+PASS bash -n bashrc/.bashrc
+
+== Bench route-only assertions ==
+2026-06-11T16:35:54+00:00 ollama-bench-RTX3090.sh v1.7.0
+2026-06-11T16:35:54+00:00 OLLAMA_BENCH_RTX3090_SCRIPT_SIGNATURE=v1.7.0-auto-route-role-aware
+2026-06-11T16:35:54+00:00 model=qwen3-embedding:4b role=embedding
+route=embedding command=/mnt/data/work/v17/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model qwen3-embedding:4b --embedding
+2026-06-11T16:35:55+00:00 ollama-bench-RTX3090.sh v1.7.0
+2026-06-11T16:35:55+00:00 OLLAMA_BENCH_RTX3090_SCRIPT_SIGNATURE=v1.7.0-auto-route-role-aware
+2026-06-11T16:35:55+00:00 model=fakegen:1b role=generate
+route=generate command=/mnt/data/work/v17/ollama-info/scripts/ollama-test-and-monitor-RTX3090.sh --model fakegen:1b
+
+== Strict unsupported generation ==
+2026-06-11T16:35:57+00:00 UNSUPPORTED generation benchmark: model=qwen3-embedding:4b role=embedding does not support /api/generate
+============================================================
+RTX3090 OLLAMA TEST SUMMARY
+Run ID  : unsupported
+Model   : qwen3-embedding:4b
+Role    : embedding
+Mode    : generation
+API     : http://localhost:11434
+Think   : false
+Stream  : 1
+Status  : UNSUPPORTED
+Inference: UNSUPPORTED; selected model role does not support /api/generate
+Error   : class=unsupported_generate_for_embedding_model
+Errors  : API rows=0
+API err : model qwen3-embedding:4b is embedding-only for generation mode
+Likely  : selected model is embedding-only and does not support /api/generate.
+Next    : use a generation model with ollama test, or run embedding mode with: ollama embed-test qwen3-embedding:4b
+Tests:
+  00_capability_preflight preflight  ctx=0     prompt=      raw=       vis=       ttft=/ http=200 unsupported_generate_for_embedding_model
+Files:
+  run : /mnt/data/work/final-verify-runs/run-unsupported
+  md  : /mnt/data/work/final-verify-runs/run-unsupported/summary.md
+  csv : /mnt/data/work/final-verify-runs/run-unsupported/summary.csv
+  load: /mnt/data/work/final-verify-runs/run-unsupported/load-state.txt
+  hint: /mnt/data/work/final-verify-runs/run-unsupported/failure-hints.txt
+  log : /mnt/data/work/final-verify-runs/run-unsupported/ollama-server-log-tail.txt
+============================================================
+unsupported_exit_code=2
+PASS unsupported exit code 2
+PASS unsupported terminal status
+PASS unsupported not counted as API error
+PASS tag-preserving suggestion
+
+== Direct streaming generation ==
+2026-06-11T16:36:00+00:00 ollama-test-RTX3090.sh v1.7.0
+2026-06-11T16:36:00+00:00 OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-latency-agentic-cleanup
+2026-06-11T16:36:00+00:00 Run dir: /mnt/data/work/final-verify-runs/run-gen-stream
+2026-06-11T16:36:00+00:00 Model: fakegen:1b
+2026-06-11T16:36:00+00:00 Base URL: http://localhost:11434
+2026-06-11T16:36:00+00:00 Test plan: model=fakegen:1b role=generate embedding=0 think=false stream=1 load_mode=observed cold_verified=1 tests=4 ctx=4096 long_ctx=8192 long_prompt_words=100 predict=512 long_predict=1024 concurrency=1 run_conc=0 run_cpu=0 soak_minutes=0 run_vram_pressure=0
+2026-06-11T16:36:00+00:00 START [1/4] 01_sanity_gpu: category=sanity model=fakegen:1b mode=GPU ctx=4096 predict=128 conc=1 prompt_words=12 stream=1
+2026-06-11T16:36:01+00:00 DONE  [1/4] http=200 done_reason=stop prompt_tokens=4096 eval_tokens=128 gen_tps=128 ttft_any_ms=298.818 ttft_answer_ms=298.818 wall_s=0.624038 response_chars=256 thinking_chars=0
+2026-06-11T16:36:01+00:00 START [2/4] 02_throughput_gpu: category=throughput model=fakegen:1b mode=GPU ctx=4096 predict=512 conc=1 prompt_words=21 stream=1
+2026-06-11T16:36:02+00:00 DONE  [2/4] http=200 done_reason=stop prompt_tokens=4096 eval_tokens=512 gen_tps=512 ttft_any_ms=286.673 ttft_answer_ms=286.673 wall_s=0.599495 response_chars=1024 thinking_chars=0
+2026-06-11T16:36:02+00:00 START [3/4] 03_sustained_gpu: category=sustained model=fakegen:1b mode=GPU ctx=4096 predict=1024 conc=1 prompt_words=29 stream=1
+2026-06-11T16:36:03+00:00 DONE  [3/4] http=200 done_reason=stop prompt_tokens=4096 eval_tokens=1024 gen_tps=1024 ttft_any_ms=287.068 ttft_answer_ms=287.068 wall_s=0.648763 response_chars=2048 thinking_chars=0
+2026-06-11T16:36:03+00:00 START [4/4] 04_longctx_gpu: category=longctx model=fakegen:1b mode=GPU ctx=8192 predict=512 conc=1 prompt_words=156 stream=1
+2026-06-11T16:36:04+00:00 DONE  [4/4] http=200 done_reason=stop prompt_tokens=4096 eval_tokens=512 gen_tps=512 ttft_any_ms=278.322 ttft_answer_ms=278.322 wall_s=0.632770 response_chars=1024 thinking_chars=0
+============================================================
+RTX3090 OLLAMA TEST SUMMARY
+Run ID  : gen-stream
+Model   : fakegen:1b
+Role    : generate
+Mode    : generation
+API     : http://localhost:11434
+Think   : false
+Stream  : 1
+Status  : PASS_WITH_WARNINGS
+Warm    : visible-answer 768.00 tok/s avg (512.00-1024.00), OK rows 2
+FirstReqLoad: 0.20s; ColdVerified=1; max total 1.50s
+TTFT    : any 287.7 ms avg; answer 287.7 ms avg
+E2E500  : 1874.6 ms estimated avg
+LongCtx : prompt_tokens=4096 ctx=8192 fill=50.0% decode=512.00 visible=512.00 UNDERFILLED
+Output  : visible rows 4/4; thinking-only 0; errors 0; short=0 underfilled=1
+Inference: PASS; completed generation benchmark
+Tests:
+  01_sanity_gpu      sanity     ctx=4096  prompt=4096  raw=128.00 vis=128.00 ttft=298.818/298.818 PASS/OK
+  02_throughput_gpu  throughput ctx=4096  prompt=4096  raw=512.00 vis=512.00 ttft=286.673/286.673 PASS/OK
+  03_sustained_gpu   sustained  ctx=4096  prompt=4096  raw=1024.00 vis=1024.00 ttft=287.068/287.068 PASS/OK
+  04_longctx_gpu     longctx    ctx=8192  prompt=4096  raw=512.00 vis=512.00 ttft=278.322/278.322 INCONCLUSIVE/UNDERFILLED
+Files:
+  run : /mnt/data/work/final-verify-runs/run-gen-stream
+  md  : /mnt/data/work/final-verify-runs/run-gen-stream/summary.md
+  csv : /mnt/data/work/final-verify-runs/run-gen-stream/summary.csv
+  load: /mnt/data/work/final-verify-runs/run-gen-stream/load-state.txt
+  hint: /mnt/data/work/final-verify-runs/run-gen-stream/failure-hints.txt
+  log : /mnt/data/work/final-verify-runs/run-gen-stream/ollama-server-log-tail.txt
+============================================================
+gen_stream_rows=4
+gen_stream_header_cols=43
+PASS ttft_any_present
+PASS FirstReqLoad_summary
+sample_statuses=OK,OK,OK,UNDERFILLED
+
+== Direct embedding benchmark ==
+2026-06-11T16:36:10+00:00 ollama-test-RTX3090.sh v1.7.0
+2026-06-11T16:36:10+00:00 OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.7.0-role-latency-agentic-cleanup
+2026-06-11T16:36:10+00:00 Run dir: /mnt/data/work/final-verify-runs/run-embed
+2026-06-11T16:36:10+00:00 Model: qwen3-embedding:4b
+2026-06-11T16:36:11+00:00 Base URL: http://localhost:11434
+2026-06-11T16:36:11+00:00 Test plan: model=qwen3-embedding:4b role=embedding embedding=1 think=false stream=1 load_mode=observed cold_verified=1 tests=4 ctx=4096 long_ctx=8192 long_prompt_words=100 predict=512 long_predict=1024 concurrency=1 run_conc=0 run_cpu=0 soak_minutes=0 run_vram_pressure=0
+2026-06-11T16:36:11+00:00 START [1/4] 01_embed_sanity: category=embedding_sanity model=qwen3-embedding:4b mode=EMBED endpoint=/api/embed ctx=4096 input_words=7
+2026-06-11T16:36:12+00:00 DONE  [1/4] http=200 endpoint=/api/embed vectors=1 dim=4 prompt_tokens=1024 wall_s=0.230263
+2026-06-11T16:36:12+00:00 START [2/4] 02_embed_batch: category=embedding_batch model=qwen3-embedding:4b mode=EMBED endpoint=/api/embed ctx=4096 input_words=672
+2026-06-11T16:36:12+00:00 DONE  [2/4] http=200 endpoint=/api/embed vectors=32 dim=4 prompt_tokens=1024 wall_s=0.236353
+2026-06-11T16:36:13+00:00 START [3/4] 03_embed_longctx: category=embedding_longctx model=qwen3-embedding:4b mode=EMBED endpoint=/api/embed ctx=8192 input_words=156
+2026-06-11T16:36:13+00:00 DONE  [3/4] http=200 endpoint=/api/embed vectors=1 dim=4 prompt_tokens=1024 wall_s=0.212148
+2026-06-11T16:36:13+00:00 START [4/4] 04_embed_rag_profile: category=embedding_rag_profile model=qwen3-embedding:4b mode=EMBED endpoint=/api/embed ctx=4096 input_words=98
+2026-06-11T16:36:14+00:00 DONE  [4/4] http=200 endpoint=/api/embed vectors=6 dim=4 prompt_tokens=1024 wall_s=0.198210
+============================================================
+RTX3090 OLLAMA TEST SUMMARY
+Run ID  : embed
+Model   : qwen3-embedding:4b
+Role    : embedding
+Mode    : embedding
+API     : http://localhost:11434
+Think   : false
+Stream  : 1
+Status  : PASS_WITH_WARNINGS
+Embed   : vectors=40 dim=4 rows=4 ok=4 avg=50.00 embeds/s
+LongEmb : prompt_tokens=1024 ctx=8192 fill=12.5% UNDERFILLED
+Output  : embedding rows 4/4; errors 0
+Inference: PASS; completed embedding benchmark
+Tests:
+  01_embed_sanity    embedding_sanity   ctx=4096  prompt=1024  vec=1    dim=4     PASS/OK
+  02_embed_batch     embedding_batch    ctx=4096  prompt=1024  vec=32   dim=4     PASS/OK
+  03_embed_longctx   embedding_longctx  ctx=8192  prompt=1024  vec=1    dim=4     INCONCLUSIVE/UNDERFILLED
+  04_embed_rag_profile embedding_rag_profile ctx=4096  prompt=1024  vec=6    dim=4     PASS/OK
+Files:
+  run : /mnt/data/work/final-verify-runs/run-embed
+  md  : /mnt/data/work/final-verify-runs/run-embed/summary.md
+  csv : /mnt/data/work/final-verify-runs/run-embed/summary.csv
+  load: /mnt/data/work/final-verify-runs/run-embed/load-state.txt
+  hint: /mnt/data/work/final-verify-runs/run-embed/failure-hints.txt
+  log : /mnt/data/work/final-verify-runs/run-embed/ollama-server-log-tail.txt
+============================================================
+embed_rows=4
+embed_tests=01_embed_sanity,02_embed_batch,03_embed_longctx,04_embed_rag_profile
+PASS embed_four_rows
+PASS vector_dim_present
+PASS embed_endpoint
+
+== Package hygiene precheck ==
+PASS no scripts/legacy
+PASS no obsolete changelog/plan.txt
+PASS no generated/cache/archive debris in package tree
+
+== ADOS ledger schema validation ==
+PASS schema validation rows=69

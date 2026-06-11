@@ -40,14 +40,38 @@ need curl
 need jq
 need timeout
 need date
-if [[ -x "$SCRIPT_DIR/tools/legacy/calc_perf_ollama_table.py" ]]; then
-  CALC_TABLE="$SCRIPT_DIR/tools/legacy/calc_perf_ollama_table.py"
-elif [[ -x "$SCRIPT_DIR/calc_perf_ollama_table.py" ]]; then
-  CALC_TABLE="$SCRIPT_DIR/calc_perf_ollama_table.py"
-else
-  echo "ERROR: missing calc_perf_ollama_table.py (expected tools/legacy/)" >&2
-  exit 2
-fi
+
+emit_quick_summary_table() {
+  local csv="$1"
+  awk -F',' '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        gsub(/^"|"$/, "", $i)
+        idx[$i] = i
+      }
+      printf "%-18s %-5s %-8s %-8s %-12s %-10s %-10s %s\n", "test", "mode", "conc", "gen", "gen_tps", "total_ms", "load_ms", "status"
+      printf "%-18s %-5s %-8s %-8s %-12s %-10s %-10s %s\n", "------------------", "-----", "--------", "--------", "------------", "----------", "----------", "------"
+      next
+    }
+    function csvcell(name, v) {
+      v = $(idx[name])
+      gsub(/^"|"$/, "", v)
+      return v
+    }
+    NF > 1 {
+      test = csvcell("test")
+      mode = csvcell("mode")
+      conc = csvcell("concurrency")
+      gen = csvcell("gen_tokens")
+      gen_tps = csvcell("gen_tps")
+      total_ms = csvcell("total_ms")
+      load_ms = csvcell("load_ms")
+      err = csvcell("error")
+      status = (err == "" ? "OK" : "ERR:" err)
+      printf "%-18s %-5s %-8s %-8s %-12s %-10s %-10s %s\n", test, mode, conc, gen, gen_tps, total_ms, load_ms, status
+    }
+  ' "$csv"
+}
 
 usage() {
   cat <<H
@@ -383,7 +407,7 @@ say "============================================================"
 say ">>> QUICK SUMMARY (from CSV)"
 say "============================================================"
 
-"$CALC_TABLE" "$CSVFILE" | tee -a "$LOGFILE"
+emit_quick_summary_table "$CSVFILE" | tee -a "$LOGFILE"
 
 say ""
 if [[ "$RUN_CPU" == "1" ]]; then
