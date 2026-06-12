@@ -1,0 +1,68 @@
+ollama-info v1.13 unpacked ZIP review
+timestamp=2026-06-12T23:50:21+00:00
+
+[1] zip content hygiene
+PASS no cache/git dirs
+PASS no temp/compiled files
+PASS no runtime run directories
+
+[2] manifest inventory
+PASS PACKAGE-MANIFEST.txt matches unpacked file inventory
+
+[3] shell syntax
+PASS bash -n bashrc/.bashrc
+PASS bash -n scripts/ollama-bench-RTX3090.sh
+PASS bash -n scripts/ollama-common.sh
+PASS bash -n scripts/ollama-download.sh
+PASS bash -n scripts/ollama-embed-test-RTX3090.sh
+PASS bash -n scripts/ollama-gen
+PASS bash -n scripts/ollama-monitor.sh
+PASS bash -n scripts/ollama-perf
+PASS bash -n scripts/ollama-perf-table
+PASS bash -n scripts/ollama-start
+PASS bash -n scripts/ollama-status
+PASS bash -n scripts/ollama-stop
+PASS bash -n scripts/ollama-test-RTX3090.sh
+PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama-vision-test-RTX3090.sh
+PASS bash -n scripts/ollama.sh
+
+[4] python compile
+PASS python module compile
+
+[5] embedded Python here-doc compile
+PASS embedded Python blocks compile count=6
+
+[6] JSON parse
+PASS json PACKAGE.json
+PASS json SOURCE-OF-TRUTH.json
+PASS json schema.json
+PASS json qa-evidence/PACKAGE.json
+PASS json qa-evidence/schema-validation-report.json
+PASS json qa-evidence/validator-report.json
+
+[7] route/help/readme consistency
+PASS help documents vision-test with --image
+PASS help documents context-test
+PASS vision-test route implemented
+PASS context-test route implemented
+PASS README uses explicit vision image command
+PASS no bare invalid vision-test command
+
+[8] bashrc drift and duplication
+PASS bashrc has one safe wrapper, package route intercepts, and native pass-through
+
+[9] version and artifact consistency
+PASS version/artifact consistency
+
+[10] v1.13 implementation checks
+PASS joined answer files
+PASS category gates
+PASS context skipped truth
+PASS ranking split
+PASS scorecard exit source
+
+[11] duplication scan
+PASS no duplicate route/script definitions found
+
+REVIEW_RESULT=PASS

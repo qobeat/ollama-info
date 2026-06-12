@@ -1,17 +1,12 @@
 {
-  "package_id": "ollama-info",
-  "project_name": "ollama-info RTX 3090 Ollama Diagnostic Toolkit",
-  "project_slug": "ollama-info",
-  "version": "1.12.0",
-  "status": "production-grade-table-summary-context-gate-release",
-  "package_type": "local-ai-playground-diagnostic-toolkit",
-  "delivery_package_name": "ollama-info-v1.12.zip",
-  "evidence_package_name": "ollama-info-v1.12-quality-evidence.zip",
-  "source_location": "ollama-info-v1.11.zip supplied by user as baseline; updated to v1.12",
-  "compaction_constraints": {
-    "exclude_runtime_runs": true,
-    "exclude_nested_archives": true,
-    "exclude_caches": true,
-    "exclude_unrelated_generated_artifacts": true
-  }
+  "name": "ollama-info",
+  "version": "1.13.0",
+  "artifact_type": "local_ollama_rtx3090_diagnostic_package",
+  "target_environment": "WSL2/Linux with RTX 3090 and Ollama",
+  "delivery_package_name": "ollama-info-v1.13.zip",
+  "source_location": "ollama-info-v1.12.zip supplied by user as baseline; updated to v1.13",
+  "primary_entrypoint": "scripts/ollama.sh",
+  "bash_integration": "bashrc/.bashrc",
+  "status": "production_candidate_verified_static_and_replay",
+  "contains_runtime_logs": false
 }

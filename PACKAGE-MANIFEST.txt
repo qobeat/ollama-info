@@ -1,3 +1,7 @@
+ollama-info v1.13 package manifest
+Generated from source tree; runtime run directories excluded.
+This is a path inventory, so PACKAGE-MANIFEST.txt intentionally lists itself.
+
 MANIFEST.md
 PACKAGE-MANIFEST.txt
 PACKAGE.json
@@ -8,14 +12,19 @@ bashrc/README.md
 changelog/CHANGELOG.md
 changelog/REFLECTION-v1.11.md
 changelog/REFLECTION-v1.12.md
+changelog/REFLECTION-v1.13.md
 changelog/REVIEW-v1.11.md
 changelog/REVIEW-v1.12.md
+changelog/REVIEW-v1.13.md
 changelog/VERIFY-v1.11.md
 changelog/VERIFY-v1.12.md
+changelog/VERIFY-v1.13.md
 changelog/atomic-requirements-v1.11.txt
 changelog/atomic-requirements-v1.12.txt
+changelog/atomic-requirements-v1.13.txt
 changelog/plan-1.11.txt
 changelog/plan-1.12.txt
+changelog/plan-1.13.txt
 qa-evidence/PACKAGE.json
 qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
 qa-evidence/ados-compliance.md
@@ -26,6 +35,7 @@ qa-evidence/self-evaluation.md
 qa-evidence/semantic-replay-report.md
 qa-evidence/stress-test-report.md
 qa-evidence/test-results-reference-review.md
+qa-evidence/unpacked-review-report.txt
 qa-evidence/validator-report.json
 qa-evidence/verification-output.txt
 requirements.md
@@ -46,4 +56,5 @@ scripts/ollama-stop
 scripts/ollama-summarize-results.py
 scripts/ollama-test-RTX3090.sh
 scripts/ollama-test-and-monitor-RTX3090.sh
+scripts/ollama-vision-test-RTX3090.sh
 scripts/ollama.sh

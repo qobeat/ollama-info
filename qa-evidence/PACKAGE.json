@@ -1,12 +1,15 @@
 {
-  "verified_artifact": "ollama-info-v1.12.zip",
-  "verified_project": "ollama-info",
-  "verified_version": "1.12.0",
-  "evidence_ledger_path": "qa-evidence/evidence-ledger.jsonl",
-  "verification_report_path": "qa-evidence/verification-output.txt",
-  "quality_summary_path": "qa-evidence/QUALITY-EVIDENCE-SUMMARY.md",
-  "stress_report_path": "qa-evidence/stress-test-report.md",
-  "replay_report_path": "qa-evidence/semantic-replay-report.md",
-  "self_evaluation_path": "qa-evidence/self-evaluation.md",
-  "reflection_report_path": "changelog/REFLECTION-v1.12.md"
+  "verified_artifact": "ollama-info-v1.13.zip",
+  "verified_version": "1.13.0",
+  "verification_scope": "static_validation_and_uploaded_result_replay",
+  "runtime_ollama_execution_in_sandbox": false,
+  "status": "PASS_WITH_RUNTIME_REPLAY_LIMITATION",
+  "primary_reports": [
+    "qa-evidence/verification-output.txt",
+    "qa-evidence/self-evaluation.md",
+    "qa-evidence/semantic-replay-report.md",
+    "qa-evidence/unpacked-review-report.txt"
+  ],
+  "reflection_report_path": "changelog/REFLECTION-v1.13.md",
+  "final_unpacked_zip_review": "PASS"
 }

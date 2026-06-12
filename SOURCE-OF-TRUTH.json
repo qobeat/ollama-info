@@ -1,11 +1,15 @@
 {
-  "project_goal_and_objectives": "README.md",
-  "durable_requirements": "requirements.md",
-  "command_behavior": "README.md",
-  "runtime_scripts": "scripts/",
-  "structured_schema": "schema.json",
-  "qa_evidence": "qa-evidence/evidence-ledger.jsonl",
-  "package_manifest": "PACKAGE-MANIFEST.txt",
-  "context_window_policy": "README.md#context-window-testing",
-  "hermes_65k_gate": "README.md#ollama-context-test-model-model-min-context-65536"
+  "project": "ollama-info",
+  "version": "1.13.0",
+  "source_of_truth_files": [
+    "README.md",
+    "requirements.md",
+    "scripts/ollama.sh",
+    "scripts/ollama-test-RTX3090.sh",
+    "scripts/ollama-summarize-results.py",
+    "scripts/ollama-aggregate-summary.py",
+    "scripts/ollama-vision-test-RTX3090.sh",
+    "bashrc/.bashrc"
+  ],
+  "artifact_policy": "Generated run folders and benchmark result zips are excluded from the source package."
 }

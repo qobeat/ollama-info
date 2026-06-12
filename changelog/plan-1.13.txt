@@ -1,0 +1,11 @@
+GOAL: Produce production-ready v1.13 from v1.12 by fixing live-run defects found in v1.12 quality evaluation.
+
+OBJECTIVES:
+1. Make Bash integration match documented `ollama test` workflow while preserving native Ollama pass-through.
+2. Implement an explicit `vision-test` route or remove all invalid references; v1.13 implements the route with `--image PATH`.
+3. Replace legacy Markdown exit parsing with `model-scorecard.csv` parsing.
+4. Materialize joined answer/thinking text for all streamed generation probes.
+5. Add category-aware capability gates for coding, essay, and internet/current-facts boundary.
+6. Separate skipped context rows from real runtime attempts and update Hermes gate wording.
+7. Split aggregate rankings into balanced, TTFT, TPS, and context-only views.
+8. Rewrite README and bashrc docs so every command and artifact name is correct.

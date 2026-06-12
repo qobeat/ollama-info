@@ -1,14 +1,13 @@
-# Reference result review
+# Test-results reference review v1.13
 
-The clean v1.11 resident-warm rerun proved that default testing is now operational and much faster than full diagnostics. It also showed two remaining usability gaps: final summaries were hard to interpret, and Hermes main-chat context was unresolved because 65K context was not validated.
+Uploaded v1.12 runtime ZIPs were used as replay evidence.
 
-v1.12 response:
+Replay checks performed with v1.13 summarizer:
 
-- add `ollama test --full MODEL...` for all lanes;
-- add `--min-context 65536` as the explicit Hermes context gate;
-- add `ollama context-test MODEL... --min-context 65536`;
-- redesign per-model and aggregate summaries into tables;
-- expose preload/model-ready time separately from warm TTFT;
-- emit `context-summary.csv` and `hermes-compatibility.md`;
-- prevent Hermes main-chat recommendation unless `hermes_65k_context=PASS`;
-- preserve fast resident-warm default for routine model comparison.
+- latest full 6-model result replayed successfully;
+- context-only 6-model result replayed successfully;
+- skipped 65K rows became `CONTEXT_NOT_RUN_SKIPPED`;
+- `context_65k_attempted=0` for skipped-only 65K rows;
+- Hermes/main-chat remained `NOT CONFIRMED`;
+- old rows with ambiguous internet boundary were downgraded to `decision_grade=0`;
+- aggregate summary no longer emits a bare invalid `ollama vision-test` command and instead requires `--image /path/to/test-image.png`.

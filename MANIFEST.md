@@ -1,36 +1,27 @@
-# MANIFEST
+# ollama-info v1.13 manifest
 
-## Authority order
+## Package purpose
 
-1. `PACKAGE.json` owns package identity and compaction constraints.
-2. `requirements.md` owns durable goal, objective, and release requirement obligations.
-3. `README.md` owns user-facing command behavior and interpretation guidance.
-4. `scripts/` owns executable behavior.
-5. `SOURCE-OF-TRUTH.json` owns governed concept ownership.
-6. `changelog/plan-1.12.txt` owns implementation plan and atomic work mapping.
-7. `qa-evidence/evidence-ledger.jsonl` owns observed verification facts.
+Local RTX 3090 / WSL2 Ollama diagnostic package with evidence-backed model recommendations, required-context gates, explicit vision testing, embedding tests, and conservative settings output.
 
-## Required runtime surfaces
+## Authoritative files
 
-- `scripts/ollama.sh`
-- `scripts/ollama-test-RTX3090.sh`
-- `scripts/ollama-test-and-monitor-RTX3090.sh`
-- `scripts/ollama-embed-test-RTX3090.sh`
-- `scripts/ollama-bench-RTX3090.sh`
-- `scripts/ollama-common.sh`
-- `scripts/ollama-run-generate.py`
-- `scripts/ollama-summarize-results.py`
-- `scripts/ollama-aggregate-summary.py`
+1. `README.md` is the user-facing operating manual.
+2. `requirements.md` defines the atomic requirements and acceptance conditions.
+3. `scripts/ollama.sh` is the command router.
+4. `scripts/ollama-test-RTX3090.sh` is the single-model generation/context runner.
+5. `scripts/ollama-summarize-results.py` owns decision-grade scoring and settings output.
+6. `scripts/ollama-aggregate-summary.py` owns multi-model summaries and use-case winners.
+7. `scripts/ollama-vision-test-RTX3090.sh` owns explicit image/vision evidence.
+8. `bashrc/.bashrc` owns shell integration.
+9. `qa-evidence/` records verification and self-review.
 
-## Required documentation and governance surfaces
+## Production-quality gates
 
-- `README.md`
-- `requirements.md`
-- `PACKAGE.json`
-- `SOURCE-OF-TRUTH.json`
-- `schema.json`
-- `qa-evidence/evidence-ledger.jsonl`
-
-## Package boundary
-
-The source package excludes runtime `run-*` directories, nested ZIP files, Python caches, `.pyc` files, `.DS_Store`, and unrelated generated artifacts. Runtime result ZIPs are created outside the source package under the configured temporary directory.
+- Shell syntax passes for all shipped shell scripts.
+- Python compilation passes for all shipped Python scripts.
+- JSON files parse successfully.
+- README examples match implemented `scripts/ollama.sh` routes.
+- Aggregate summary no longer emits an invalid vision command.
+- Skipped context rows are not counted as runtime attempts.
+- Decision-grade generation requires category-aware capability gates.

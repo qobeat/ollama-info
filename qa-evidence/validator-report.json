@@ -1,1 +1,1 @@
-{"status":"PASS","checks":["required_files_present","scripts_syntax_checked","readme_updated","context_gate_present","package_hygiene_checked"]}
+{"status":"PASS_WITH_RUNTIME_REPLAY_LIMITATION","version":"1.13.0","shell_syntax":"PASS","python_compile":"PASS","json_parse":"PASS","readme_route_check":"PASS","uploaded_result_replay":"PASS","live_ollama_execution":"NOT_AVAILABLE_IN_SANDBOX"}

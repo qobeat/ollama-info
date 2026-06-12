@@ -1,12 +1,10 @@
-# ADOS compliance note
+# ADOS compliance review v1.13
 
-Applicable ADOS requirements are addressed through:
-
-- GOAL/Objectives in README and requirements.md.
-- Source-of-truth map in SOURCE-OF-TRUTH.json.
-- Structured evidence in model-scorecard.csv and context-summary.csv.
-- Materialized plan/review/verify/reflection in changelog.
-- QA evidence ledger and self-evaluation.
-- Package hygiene checks before final ZIP creation.
-
-The package treats recommendations as evidence-backed claims and prevents Hermes main-chat finalization without the 65K context gate.
+| Pillar | Result | Evidence |
+|---|---|---|
+| Goal-first | PASS | README and requirements define the RTX 3090/Ollama diagnostic goal. |
+| Objective traceability | PASS | Requirements R-001 through R-015 map to implemented scripts and QA checks. |
+| Evidence-first | PASS | Generated summaries rely on CSV/Markdown/raw artifacts. |
+| Evaluation-first | PASS | Static validation and replay validation are recorded. |
+| Materialization | PASS | Joined answer/thinking artifacts are now materialized. |
+| Non-overclaiming | PASS | Skipped context rows no longer count as runtime-tested; vision requires an image. |

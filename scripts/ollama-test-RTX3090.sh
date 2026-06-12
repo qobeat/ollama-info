@@ -4,8 +4,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ollama-common.sh"
 
-VERSION="1.12.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.12-table-summary-full-context-hermes65k"
+VERSION="1.13.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.13-category-gates-context-truth"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
@@ -57,7 +57,7 @@ Options:
   --model MODEL              Model or local pattern
   --full                     Run all lanes: empty-card + resident-warm + context-pressure
   --mode MODE                resident-warm|diagnostic|quick|empty-card|context-pressure|perf
-  --profile PROFILE          ados|perf|vision (default: ados)
+  --profile PROFILE          ados|coding-quality|perf (default: ados)
   --num-ctx N                Baseline context (default: $NUM_CTX)
   --num-predict N            ADOS capability prediction length (default: $NUM_PREDICT)
   --quick                    Shortcut for --mode quick --num-predict $QUICK_PREDICT
@@ -285,32 +285,67 @@ append_row_from_metrics() {
   fi
   if [[ "$resp" -lt 80 && "$category" != context && "$state" == "PASS" ]]; then sample="NEEDS_REVIEW"; fi
   if [[ "$category" == "coding" && "$state" == "PASS" ]]; then
-    local text_file="$RUN_DIR/raw/${test}.text"
-    jq -r '.chunk.response // ""' "$RUN_DIR/raw/${test}.ndjson" 2>/dev/null >"$text_file" || true
-    if ! grep -Eq 'def +top_k_frequent|Counter|pytest|assert' "$text_file"; then sample="NEEDS_REVIEW"; fi
-    if grep -q '```python' "$text_file"; then
-      python3 - <<'PY' "$text_file" "$RUN_DIR/raw/${test}.pycheck" || true
+    local text_file="$RUN_DIR/raw/${test}.answer.txt"
+    if [[ ! -s "$text_file" ]]; then
+      python3 - <<'PY' "$RUN_DIR/raw/${test}.ndjson" "$text_file" || true
+import json, sys
+out=[]
+for line in open(sys.argv[1], encoding='utf-8', errors='ignore'):
+    try:
+        obj=json.loads(line).get('chunk',{})
+    except Exception:
+        continue
+    out.append(str(obj.get('response') or obj.get('message',{}).get('content') or ''))
+open(sys.argv[2], 'w', encoding='utf-8').write(''.join(out))
+PY
+    fi
+    if ! grep -Eiq 'def +top_k_frequent|Counter|pytest|assert' "$text_file"; then sample="NEEDS_REVIEW"; fi
+    python3 - <<'PY' "$text_file" "$RUN_DIR/raw/${test}.pycheck" || true
 import re,sys,py_compile,tempfile,os
 text=open(sys.argv[1],encoding='utf-8',errors='ignore').read()
-blocks=re.findall(r'```python\n(.*?)```', text, flags=re.S)
+blocks=re.findall(r'```(?:python|py)?\s*\n(.*?)```', text, flags=re.S|re.I)
 status='NO_CODE_BLOCK'
 if blocks:
     code=blocks[0]
     fd,path=tempfile.mkstemp(suffix='.py')
-    os.write(fd,code.encode()); os.close(fd)
+    os.write(fd,code.encode())
+    os.close(fd)
     try:
-        py_compile.compile(path,doraise=True); status='PY_COMPILE_PASS'
+        py_compile.compile(path,doraise=True)
+        status='PY_COMPILE_PASS'
     except Exception as e:
         status='PY_COMPILE_FAIL:'+str(e).split('\n')[0]
     os.unlink(path)
 open(sys.argv[2],'w').write(status+'\n')
 PY
-    fi
+    pycheck_status="$(cat "$RUN_DIR/raw/${test}.pycheck" 2>/dev/null || echo NO_CODE_BLOCK)"
+    case "$pycheck_status" in PY_COMPILE_PASS|NO_CODE_BLOCK) ;; *) sample="NEEDS_REVIEW" ;; esac
   fi
   if [[ "$category" == "internet_access" && "$state" == "PASS" ]]; then
-    local text_file="$RUN_DIR/raw/${test}.text"
-    jq -r '.chunk.response // ""' "$RUN_DIR/raw/${test}.ndjson" 2>/dev/null >"$text_file" || true
-    if ! grep -Eiq "(cannot|can't|do not|don't|no live|no internet|not have).*(internet|web|browse|current|live)|without.*(browser|internet)" "$text_file"; then sample="NEEDS_REVIEW"; fi
+    local text_file="$RUN_DIR/raw/${test}.answer.txt"
+    if [[ ! -s "$text_file" ]]; then
+      python3 - <<'PY' "$RUN_DIR/raw/${test}.ndjson" "$text_file" || true
+import json, sys
+out=[]
+for line in open(sys.argv[1], encoding='utf-8', errors='ignore'):
+    try:
+        obj=json.loads(line).get('chunk',{})
+    except Exception:
+        continue
+    out.append(str(obj.get('response') or obj.get('message',{}).get('content') or ''))
+open(sys.argv[2], 'w', encoding='utf-8').write(''.join(out))
+PY
+    fi
+    if ! python3 - <<'PY' "$text_file"; then sample="NEEDS_REVIEW"; fi
+import re, sys
+text=open(sys.argv[1],encoding='utf-8',errors='ignore').read().lower()
+patterns=[
+  r"(cannot|can't|do not|don't|not able|unable|no)\W{0,40}(access|browse|fetch|visit|open)\W{0,80}(internet|web|webpage|website|current|live|real[- ]?time)",
+  r"(without|no)\W{0,40}(browser|web|internet)\W{0,80}(tools?|access|connection)",
+  r"(knowledge|information)\W{0,80}(may be|can be|is)\W{0,40}(outdated|not current)",
+]
+sys.exit(0 if any(re.search(p,text,re.S) for p in patterns) else 1)
+PY
   fi
   printf '%s,%s,%s,%s,/api/generate,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$ts" "$test" "$mode" "$category" "$state" "$sample" "$ctx" "$predict" "$prompt" "$eval" "$raw" "$vis" "$ttfta" "$ttftans" "$loads" "$totals" "$resp" "$think" "$thinkonly" "$http" "$done" "$(printf '%s' "$notes" | tr ',' ';')" >>"$SUMMARY_CSV"
@@ -330,7 +365,8 @@ run_generate_row() {
     jq -nc --arg model "$MODEL" --arg prompt "$prompt" --arg keep_alive "$KEEP_ALIVE" --arg think "$THINK" --argjson ctx "$ctx" --argjson predict "$predict" --argjson temp "$TEMPERATURE" \
       '{model:$model,prompt:$prompt,stream:true,keep_alive:$keep_alive,think:$think,options:{num_ctx:$ctx,num_predict:$predict,temperature:$temp}}' >"$payload"
   fi
-  "$SCRIPT_DIR/ollama-run-generate.py" --base-url "$BASE_URL" --payload "$payload" --raw "$raw" --metrics "$metrics" --http-file "$http" --stderr-file "$err" --timeout "$TIMEOUT_SEC" || true
+  local answer="$RAW_DIR/${test}.answer.txt" thinking="$RAW_DIR/${test}.thinking.txt" preview="$RAW_DIR/${test}.answer-preview.md"
+  "$SCRIPT_DIR/ollama-run-generate.py" --base-url "$BASE_URL" --payload "$payload" --raw "$raw" --metrics "$metrics" --http-file "$http" --stderr-file "$err" --answer-file "$answer" --thinking-file "$thinking" --answer-preview-file "$preview" --timeout "$TIMEOUT_SEC" || true
   append_row_from_metrics "$test" "$mode" "$category" "$ctx" "$predict" "$metrics" "$notes"
   log "DONE  $test http=$(cat "$http" 2>/dev/null || echo 0) eval=$(jq -r '.eval_tokens // 0' "$metrics") visible_tps=$(jq -r '.visible_answer_tps // ""' "$metrics") ttft=$(jq -r '.ttft_answer_ms // ""' "$metrics")"
 }
@@ -476,9 +512,13 @@ if [[ "$ZIP_ON_EXIT" -eq 1 ]]; then
   log "zip: $ARCHIVE_PATH"
 fi
 
-SUMMARY_STATUS="$(awk -F': ' '/^- status:/{print $2; exit}' "$RUN_DIR/summary.md" 2>/dev/null || true)"
+SUMMARY_STATUS="$(awk -F, 'NR==2{print $3; exit}' "$RUN_DIR/model-scorecard.csv" 2>/dev/null || true)"
+DECISION_GRADE="$(awk -F, 'NR==2{print $4; exit}' "$RUN_DIR/model-scorecard.csv" 2>/dev/null || true)"
+if [[ -z "$SUMMARY_STATUS" ]]; then
+  SUMMARY_STATUS="NO_ROWS"
+fi
 if [[ "$STRICT_EXIT" -eq 1 ]]; then
-  if grep -q ',FAIL,' "$SUMMARY_CSV" || grep -q 'FAIL_VISIBLE_OUTPUT' "$SUMMARY_CSV"; then exit 1; fi
+  if grep -q ',FAIL,' "$SUMMARY_CSV" || grep -q 'FAIL_VISIBLE_OUTPUT\|NEEDS_REVIEW' "$SUMMARY_CSV" || [[ "$DECISION_GRADE" != "1" ]]; then exit 1; fi
 fi
 case "$SUMMARY_STATUS" in
   TOOL_FAILURE|FAIL|NO_ROWS) exit 1 ;;

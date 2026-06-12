@@ -1,0 +1,10 @@
+R1 bash wrapper intercepts package subcommands only and passes native commands through.
+R2 `ollama vision-test MODEL --image PATH` exists and produces image evidence.
+R3 summarizer writes category gates to model-scorecard.csv.
+R4 decision_grade requires coding, essay, and internet-boundary PASS for generation runs.
+R5 context 65K runtime attempted is true only for non-skipped rows with HTTP evidence.
+R6 `CONTEXT_NOT_RUN_SKIPPED` is distinct from runtime failure or pass.
+R7 aggregate summary no longer prints a bare invalid `ollama vision-test` command.
+R8 single-model exit code comes from model-scorecard.csv.
+R9 README uses `aggregate-terminal-summary.txt`, not `.md`.
+R10 all shell/Python/JSON validation passes before packaging.

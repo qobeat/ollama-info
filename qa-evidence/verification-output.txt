@@ -1,5 +1,7 @@
-Verification v1.12
---- syntax shell
+Verification v1.13
+timestamp=2026-06-12T23:46:53+00:00
+
+[1] shell syntax
 PASS bash -n scripts/ollama-bench-RTX3090.sh
 PASS bash -n scripts/ollama-common.sh
 PASS bash -n scripts/ollama-download.sh
@@ -7,35 +9,46 @@ PASS bash -n scripts/ollama-embed-test-RTX3090.sh
 PASS bash -n scripts/ollama-monitor.sh
 PASS bash -n scripts/ollama-test-RTX3090.sh
 PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama-vision-test-RTX3090.sh
 PASS bash -n scripts/ollama.sh
-PASS bash -n bashrc/.bashrc
-PASS bash -n scripts/ollama-gen
-PASS bash -n scripts/ollama-monitor.sh
-PASS bash -n scripts/ollama-perf
-PASS bash -n scripts/ollama-perf-table
 PASS bash -n scripts/ollama-start
 PASS bash -n scripts/ollama-status
 PASS bash -n scripts/ollama-stop
---- syntax python
-PASS python py_compile
---- json
+PASS bash -n scripts/ollama-gen
+PASS bash -n scripts/ollama-perf
+PASS bash -n scripts/ollama-perf-table
+PASS bash -n bashrc/.bashrc
+
+[2] python compile
+PASS py_compile scripts/ollama-aggregate-summary.py
+PASS py_compile scripts/ollama-run-generate.py
+PASS py_compile scripts/ollama-summarize-results.py
+
+[3] embedded Python here-doc compile in ollama-test-RTX3090.sh
+found=6
+PASS here_doc_python_1
+PASS here_doc_python_2
+PASS here_doc_python_3
+PASS here_doc_python_4
+PASS here_doc_python_5
+PASS here_doc_python_6
+
+[4] json parse
 PASS json PACKAGE.json
+PASS json SOURCE-OF-TRUTH.json
 PASS json schema.json
-PASS json qa-evidence/validator-report.json
+PASS json qa-evidence/PACKAGE.json
 PASS json qa-evidence/schema-validation-report.json
-PASS evidence ledger jsonl
---- route parsing
-model=fake:1 role=generate route=ollama-test mode=diagnostic profile=ados min_context=65536 context_steps=4096,8192,16384,32768,65536
-PASS --full --min-context route-only
-model=fake:1 role=generate route=ollama-test-and-monitor
-PASS wrapper --full before model
-model=fake:1 role=generate route=ollama-test-and-monitor
-PASS context-test route-only
---- summarizer replay
-PASS short context row rejected
-PASS 65K context row accepted
-PASS terminal Hermes table signal
---- readme
-PASS README coverage
---- hygiene
-PASS no runtime debris in source tree
+PASS json qa-evidence/validator-report.json
+
+[5] route help check
+PASS help contains vision-test route
+PASS help contains context-test route
+
+[6] README route check
+PASS README route examples
+PASS README aggregate artifact name
+
+[7] replay summary check already performed against uploaded v1.12 result zips
+PASS replay aggregate vision command requires --image
+PASS replay context-only labels skipped rows distinctly

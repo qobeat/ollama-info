@@ -1,44 +1,92 @@
 # ollama-info
 
-`ollama-info` is a local Ollama evaluation and configuration tool for an RTX 3090 workstation. It measures local model behavior, qualifies model suitability for coding/chat/Hermes/ADOS workflows, and emits reviewable WSL2/Linux Ollama settings that can be applied through a systemd drop-in.
+`ollama-info` is a local Ollama evaluation and configuration toolkit for an RTX 3090 workstation on WSL2/Linux. It measures model latency, throughput, residency, VRAM pressure, context-window behavior, and role suitability for coding, chat, Hermes, ADOS, embedding/RAG, and explicit image/vision workflows.
 
-The tool is designed for a single-developer workstation where practical latency, model residency, context window, GPU memory pressure, and repeatable evidence matter more than a single raw tokens-per-second number.
+The package is intentionally evidence-first: every recommendation is backed by generated CSV, Markdown, raw response, and settings artifacts. It does not treat model metadata as sufficient proof of runtime context compatibility.
 
-## GOAL
+## Version
+
+Current package version: **v1.13.0**.
+
+v1.13 fixes the v1.12 production blockers:
+
+| Area | v1.13 behavior |
+|---|---|
+| Bash integration | `ollama test ...` works through a safe wrapper; native commands such as `ollama list` pass through. |
+| Vision workflow | `ollama vision-test MODEL --image PATH` is implemented; vision is not inferred from text-only tests. |
+| Exit codes | Single-model runs read status from `model-scorecard.csv`, not legacy Markdown. |
+| Streamed text | Joined `answer.txt` and `thinking.txt` artifacts are written for capability checks. |
+| Capability gates | Coding, essay, and internet/current-facts boundary gates are tracked separately. |
+| Hermes context | Skipped context rows are not reported as runtime-tested. |
+| Aggregate ranking | Balanced, TTFT, TPS, and context-only summaries are separated. |
+
+## Goal
 
 Identify the best local Ollama model and the safest performance configuration for each target use case on the current RTX 3090 / WSL2 / Ollama environment.
-
-The goal surface has five mandatory facets:
 
 | Facet | Required result |
 |---|---|
 | Performance measurement | Warm TTFT, visible tokens/sec, preload/model-ready cost, VRAM use, residency, and error state are captured per model. |
-| Use-case selection | Results are reported separately for coding, chat, Hermes, ADOS, ADOS code-repair, heavy reasoning, and vision. |
-| Context validation | A model is not considered Hermes main-chat compatible unless it passes the requested context gate, normally `--min-context 65536`. |
+| Use-case selection | Results are reported separately for coding, chat, Hermes, ADOS, ADOS code repair, heavy reasoning, embedding/RAG, and explicit vision. |
+| Context validation | A model is not considered Hermes main-chat compatible unless a real runtime row passes the requested context gate, normally `--min-context 65536`. |
 | Settings output | The run emits `recommended-ollama-env.conf` and `performance-settings.sh` with confidence labels. |
-| Evidence discipline | Every recommendation is backed by CSV/Markdown evidence and downgraded when evidence is partial, contaminated, or missing. |
-
-## Objectives
-
-| Objective | Implementation surface | Success condition |
-|---|---|---|
-| Measure daily model usability | `ollama test MODEL` | Runs resident-warm ADOS probes and reports warm TTFT/TPS. |
-| Measure full model readiness | `ollama test --full MODEL` | Runs empty-card, resident-warm, and context-pressure lanes. |
-| Validate Hermes context | `ollama test --full --min-context 65536 MODEL` or `ollama context-test MODEL --min-context 65536` | Reports `Hermes65K=PASS` only when the context row passes fill/output gates. |
-| Avoid false context positives | `context-summary.csv`, `hermes-compatibility.md` | HTTP 200 with one/few tokens becomes `CONTEXT_ACCEPTED_SHORT_OUTPUT`, not a pass. |
-| Produce clear summaries | `terminal-summary.txt`, `summary.md`, aggregate summary | Output uses tables for execution state, performance, capability rows, context, settings, and use-case recommendations. |
-| Produce applyable settings | `recommended-ollama-env.conf`, `performance-settings.sh` | Settings include confidence and conservative defaults when context is not confirmed. |
-| Support future enhancement | `requirements.md`, `schema.json`, `qa-evidence/` | Project surfaces remain compact, traceable, and evidence-backed. |
+| Evidence discipline | Recommendations are downgraded when capability, context, or runtime evidence is partial, skipped, contaminated, or missing. |
 
 ## Installation
 
-Copy the repository folder somewhere on your WSL2/Linux host, then source or install the wrapper from `bashrc/.bashrc` so that `ollama` subcommands delegate to `scripts/ollama.sh` when appropriate.
+Copy the repository folder somewhere on your WSL2/Linux host. Recommended location:
 
-Typical direct usage from the project root:
+```bash
+mkdir -p ~/dev
+cp -R ollama-info ~/dev/ollama-info
+cd ~/dev/ollama-info
+```
+
+Install the Bash wrapper without replacing your current `.bashrc`:
+
+```bash
+cp ~/.bashrc ~/.bashrc.backup-$(date +%Y%m%d-%H%M%S)
+cat bashrc/.bashrc >> ~/.bashrc
+source ~/.bashrc
+hash -r
+```
+
+Direct usage from the project root also works without shell integration:
 
 ```bash
 scripts/ollama.sh status
 scripts/ollama.sh test qwen3:8b
+```
+
+## Bash wrapper behavior
+
+The wrapper intercepts only `ollama-info` subcommands:
+
+```bash
+ollama status
+ollama models
+ollama test qwen3:8b
+ollama test --full qwen3:8b --min-context 65536
+ollama context-test qwen3:8b --min-context 65536
+ollama vision-test qwen2.5vl:7b --image /path/to/test-image.png
+ollama embed-test bge-m3
+ollama bench qwen3:8b bge-m3
+ollama preload qwen3:8b --ctx 4096 --keep-alive 24h
+```
+
+Native Ollama commands pass through unchanged:
+
+```bash
+ollama list
+ollama ps
+ollama pull llama3.1:8b
+ollama run llama3.1:8b
+```
+
+Disable the wrapper if needed:
+
+```bash
+export OLLAMA_INFO_WRAP_CLI=0
 ```
 
 ## Command reference
@@ -47,31 +95,29 @@ scripts/ollama.sh test qwen3:8b
 
 Shows Ollama service status, API version, and RTX 3090 state.
 
-Use when checking whether Ollama and the GPU are ready before testing.
+Use before tests to confirm the API and GPU are visible.
 
 ### `ollama models`
 
-Lists local models, inferred role, size, and suggested command.
+Lists local models, inferred role, size, and suggested test command.
 
-Use when deciding which local tag to benchmark. Embedding models should be tested with `embed-test` or `bench`, not plain generation tests.
+Embedding models should be tested with `embed-test` or `bench`, not plain generation tests.
 
 ### `ollama test MODEL [MODEL...]`
 
-Runs the default daily benchmark: resident-warm ADOS probes at the baseline context, normally `4096`.
+Runs the default daily generation benchmark: resident-warm ADOS capability probes at the baseline context, normally `4096`.
 
 It measures:
 
 | Metric | Meaning |
 |---|---|
 | Preload wait | Time spent making the model resident before measured prompts. |
-| Warm TTFT | Time to first answer token when the model is resident. |
-| Visible tok/s | Answer throughput from resident-warm capability rows only. |
-| VRAM | GPU memory pressure during or after the run. |
-| Capability rows | Coding, essay, and internet-access boundary probes. |
+| Warm TTFT | Time to first visible answer token when the model is resident. |
+| Visible tok/s | Answer throughput from visible response text, excluding thinking-only output. |
+| VRAM | GPU memory pressure after the run. |
+| Capability gates | Coding, essay, and internet/current-facts boundary checks. |
 
-Use this for fast daily comparisons and for deciding which model feels responsive for OpenCode, Cursor, Hermes fallback chat, or ADOS at ordinary context sizes.
-
-`ollama test` does **not** confirm Hermes 65K context compatibility. It will report context as not tested.
+`ollama test` does **not** confirm Hermes 65K context compatibility. It reports the required context as `NOT_TESTED` unless context-pressure rows are run.
 
 Example:
 
@@ -81,17 +127,15 @@ ollama test llama3.1:8b qwen2.5vl:7b qwen3:8b
 
 ### `ollama test --full MODEL [MODEL...]`
 
-Runs all lanes:
+Runs all generation lanes:
 
 | Lane | Purpose |
 |---|---|
-| Empty-card | Measures first-load/model-switch behavior. |
-| Resident-warm | Measures daily practical performance. |
+| Empty-card | Measures first-load/model-switch behavior after unloading resident models. |
+| Resident-warm | Measures daily practical performance and capability gates. |
 | Context-pressure | Tests larger context windows up to the configured minimum context. |
 
 By default, `--full` builds a context ladder up to `65536`, unless `--min-context` or `--context-steps` changes it.
-
-Use this when confirming settings or checking whether a model can serve as a main Hermes chat model.
 
 Example:
 
@@ -103,7 +147,7 @@ ollama test --full --min-context 65536 qwen3:8b llama3.1:8b
 
 Runs context-pressure validation only. This is the shortest command for checking large-context suitability.
 
-A context row passes only when all required gates pass:
+A context row passes only when all gates pass:
 
 | Gate | Default requirement |
 |---|---:|
@@ -113,13 +157,27 @@ A context row passes only when all required gates pass:
 | Response chars | at least `500` |
 | Root error | none |
 
-If the model accepts the request but emits only one/few tokens, the row is classified as `CONTEXT_ACCEPTED_SHORT_OUTPUT`. That is not a pass and cannot confirm settings.
+Skipped rows are labeled `CONTEXT_NOT_RUN_SKIPPED` and do not count as runtime-tested. A one-token or very short answer is labeled `CONTEXT_ACCEPTED_SHORT_OUTPUT`; it is not a pass.
 
-For Hermes main chat, run:
+Example:
 
 ```bash
 ollama context-test qwen3:8b qwen2.5vl:7b llama3.1:8b --min-context 65536
 ```
+
+### `ollama vision-test MODEL --image PATH`
+
+Runs an explicit image/vision test through `/api/generate` with the Ollama `images` payload field.
+
+Vision is **not** part of text-only `ollama test` runs. You must provide a local image path.
+
+Example:
+
+```bash
+ollama vision-test qwen2.5vl:7b --image ./test-image.png
+```
+
+Output includes `summary.md`, `summary.csv`, `raw/vision.answer.txt`, `raw/vision.ndjson`, and a ZIP unless `--no-zip` is used.
 
 ### `ollama diagnose MODEL [MODEL...]`
 
@@ -147,8 +205,8 @@ Role-aware benchmark route:
 
 | Model role | Route |
 |---|---|
-| generation | generation benchmark/test |
-| embedding | `/api/embed` benchmark |
+| generation | generation test through `/api/generate` |
+| embedding | embedding test through `/api/embed` |
 
 Use this when the model list may mix generation and embedding models.
 
@@ -172,104 +230,115 @@ ollama preload qwen3.6:27b-q4_K_M --ctx 4096 --keep-alive 24h
 
 ## Output files
 
-Each single-model run emits a folder and, unless disabled, a ZIP. The most important files are:
+Each single-model generation run emits a folder and, unless disabled, a ZIP. The important files are:
 
 | File | Purpose |
 |---|---|
 | `terminal-summary.txt` | Table-first summary shown in the console. |
 | `summary.md` | Full human-readable per-model report. |
-| `model-scorecard.csv` | Machine-readable decision and metric row. |
+| `model-scorecard.csv` | Machine-readable decision, gates, and metric row. |
 | `context-summary.csv` | Machine-readable context-window evidence. |
 | `context-summary.md` | Human-readable context evidence and verdicts. |
-| `hermes-compatibility.md` | Explicit Hermes 65K result. |
+| `hermes-compatibility.md` | Explicit required-context/Hermes result. |
 | `recommendations.md` | Per-model use-case recommendation. |
 | `recommended-ollama-env.conf` | Systemd drop-in body. |
 | `performance-settings.sh` | Script to apply recommended settings. |
+| `performance-settings.md` | Rationale for settings confidence. |
 | `environment-summary.md` | Ollama, service, WSL2, and GPU environment facts. |
 | `runner-log-facts.md` | Extracted runner/server facts from Ollama logs. |
+| `raw/*.answer.txt` | Joined visible answer text for each probe. |
+| `raw/*.thinking.txt` | Joined thinking text, if the model emits it. |
+| `raw/*.ndjson` | Timestamped raw streaming chunks. |
 
-Multi-model runs additionally emit:
+Multi-model generation runs additionally emit:
 
 | File | Purpose |
 |---|---|
-| `aggregate-terminal-summary.md` | Final aggregate table summary. |
-| `model-scorecard.csv` | Merged scorecard for all models. |
-| `recommendations.md` | Use-case winners and next tests. |
-| `performance-settings-all.md` | Settings rationale for all tested models. |
+| `aggregate-terminal-summary.txt` | Final aggregate table printed to the terminal. |
+| `model-scorecard.csv` | Combined model scorecard. |
+| `recommendations.md` | Aggregate use-case winners and caveats. |
+| `performance-settings-all.md` | Settings rationale from each sub-run. |
+| `multi-model-index.csv` | Index of sub-runs and scorecards. |
+| `multi-model-summary.md` | Concatenated per-model terminal summaries. |
 
-## Interpreting settings confidence
+Vision runs emit:
 
-| Confidence | Meaning |
+| File | Purpose |
 |---|---|
-| `LOW_UNCONFIRMED` | The run did not produce enough valid evidence. Do not treat settings as tuned. |
-| `MEDIUM_WARM_ONLY` | Resident-warm performance passed, but larger context was not validated. |
-| `MEDIUM_CONTEXT_PARTIAL` | Some context evidence passed, but not the requested full context gate. |
-| `HIGH_CONTEXT_CONFIRMED` | Generation and requested context gates passed. |
+| `summary.md` | Human-readable vision test summary and answer preview. |
+| `summary.csv` | Machine-readable vision row. |
+| `raw/vision.answer.txt` | Joined answer text. |
+| `raw/vision.ndjson` | Raw streaming chunks. |
+| `raw/image.base64.txt` | Base64 image payload used for the request. |
 
-Hermes main chat requires `HIGH_CONTEXT_CONFIRMED` or at least `Hermes65K=PASS` for the chosen model.
+## Decision and recommendation rules
 
-## Use-case logic
+### Generation decision-grade
 
-The aggregate recommendations separate use cases instead of selecting one generic winner.
+A normal generation run is decision-grade only when:
 
-| Use case | Selection considerations |
+1. the run status starts with `PASS`,
+2. at least one visible non-context generation row exists, and
+3. all required capability gates pass:
+   - coding,
+   - essay,
+   - internet/current-facts boundary.
+
+A context-only run is decision-grade only when at least one context-pressure row passes.
+
+### Hermes/main-chat context gate
+
+A model is not confirmed for Hermes main chat unless a real runtime row at or above `--min-context` passes. Metadata such as `context_length=131072` is useful but not sufficient.
+
+Possible required-context results:
+
+| Result | Meaning |
 |---|---|
-| OpenCode / Cursor coding | coding probe, coder-family bonus, warm TTFT, speed, VRAM. |
-| Chat default | warm TTFT, visible output speed, lower VRAM, no slow-thinking penalty. |
-| Hermes main chat | requires `Hermes65K=PASS`. |
-| Hermes fallback 4K | can use resident-warm performance when 65K is not yet validated. |
-| ADOS default | balanced runtime, visible output, internet-boundary behavior, speed. |
-| ADOS coding repair | coding-specialized model and coding row evidence. |
-| Vision default | requires vision-specific rows; text-only qwen2.5vl tests do not prove vision quality. |
-| Heavy reasoning | larger model lane, usually resident-only. |
+| `PASS` | A real row at or above required context passed prompt-fill, eval-token, and response-char gates. |
+| `FAIL` | A real row at or above required context was attempted but failed. |
+| `NOT_RUN_SKIPPED` | A row exists only as a skip marker; it was not runtime-tested. |
+| `NOT_TESTED` | No row at or above required context exists. |
 
-## Context-window rules
+## Settings safety
 
-Context validation is deliberately strict. A large context row is not accepted merely because Ollama returns HTTP 200.
-
-A passing context row must ingest enough prompt tokens, generate enough output tokens, produce enough visible text, and avoid root API errors. If a row emits only one token, it is marked short/inconclusive.
-
-This prevents false positives where a model appears to support 65K context but does not actually produce a meaningful answer at that context.
-
-## Recommended safe baseline
-
-Until a specific model receives context-confirmed settings, use:
+Generated settings are conservative:
 
 ```ini
-[Service]
 Environment="OLLAMA_KEEP_ALIVE=24h"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_FLASH_ATTENTION=1"
-Environment="OLLAMA_CONTEXT_LENGTH=4096"
+Environment="OLLAMA_CONTEXT_LENGTH=<recommended_context>"
 # Optional after explicit validation: Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 ```
 
-Apply only after reviewing `performance-settings.md` and the generated confidence label.
+Apply only after reviewing `performance-settings.md` and the confidence label.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| `HTTP 400 invalid think value` | Old package or bad request serialization | Upgrade package and rerun. |
-| `Visible tok/s` is missing | No visible answer or thinking-only output | Inspect raw output and capability-analysis. |
-| `Hermes65K=NOT_TESTED` | The run was resident-warm only | Run `ollama test --full --min-context 65536 MODEL`. |
-| `CONTEXT_ACCEPTED_SHORT_OUTPUT` | Model accepted context but did not produce enough output | Treat as inconclusive; do not confirm settings. |
-| Very long preload wait | Model switch/cold load or storage/runtime cost | Use `ollama preload` and keep the model resident. |
-| High VRAM before run | Other models/apps are resident | Stop Hermes/OpenCode/manual chat and rerun. |
+| `Hermes required context = NOT_TESTED` | Only resident-warm test was run. | Run `ollama test --full --min-context 65536 MODEL`. |
+| `CONTEXT_NOT_RUN_SKIPPED` | A lower context step failed or VRAM was critical, so higher steps were skipped. | Inspect `context-summary.csv`; rerun with `--force-context-pressure` only if safe. |
+| `CONTEXT_ACCEPTED_SHORT_OUTPUT` | Model accepted the context but produced too little output. | Treat as not confirmed; reduce context or model size. |
+| `internet_boundary_gate=NEEDS_REVIEW` | The current-facts boundary answer was ambiguous. | Inspect `raw/*internet*.answer.txt`. |
+| `Visible tok/s` is missing | No visible answer or thinking-only output. | Inspect raw answer/thinking files. |
+| `ollama vision-test` fails with missing image | No local image was provided. | Run with `--image /path/to/test-image.png`. |
+| Very long preload wait | Model switch/cold load or storage/runtime cost. | Use `ollama preload` and keep the model resident. |
+| High VRAM before run | Other models/apps are resident. | Stop other Ollama sessions and rerun. |
 
-## Development and extension notes
+## Project files
 
-The package is organized around small shell/Python scripts:
-
-| Script | Role |
+| Path | Purpose |
 |---|---|
-| `scripts/ollama.sh` | command router and multi-model aggregation |
-| `scripts/ollama-test-RTX3090.sh` | generation/context test engine |
-| `scripts/ollama-test-and-monitor-RTX3090.sh` | hardware-snapshot wrapper |
-| `scripts/ollama-run-generate.py` | streaming `/api/generate` metrics collector |
-| `scripts/ollama-summarize-results.py` | scorecards, summaries, settings, recommendations |
-| `scripts/ollama-embed-test-RTX3090.sh` | `/api/embed` benchmark |
-| `scripts/ollama-common.sh` | shared helpers |
-
-Add new test lanes by extending `ollama-test-RTX3090.sh`, then update `ollama-summarize-results.py` so the new evidence appears in scorecards and recommendation gates.
+| `scripts/ollama.sh` | Main wrapper/router. |
+| `scripts/ollama-test-RTX3090.sh` | Single-model generation/context test runner. |
+| `scripts/ollama-test-and-monitor-RTX3090.sh` | Single-model orchestrator with hardware snapshots. |
+| `scripts/ollama-summarize-results.py` | Per-model summarizer and settings generator. |
+| `scripts/ollama-aggregate-summary.py` | Multi-model aggregate summarizer. |
+| `scripts/ollama-run-generate.py` | Streaming `/api/generate` runner with joined text artifacts. |
+| `scripts/ollama-vision-test-RTX3090.sh` | Explicit image/vision test runner. |
+| `scripts/ollama-embed-test-RTX3090.sh` | Embedding/RAG test runner. |
+| `bashrc/.bashrc` | Optional Bash integration snippet. |
+| `requirements.md` | Atomic requirements. |
+| `qa-evidence/` | Verification and release evidence. |

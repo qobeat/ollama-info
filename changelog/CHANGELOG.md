@@ -1,3 +1,17 @@
+# Changelog
+
+## 1.13.0
+
+- Added safe Bash wrapper matching documented `ollama test`, `context-test`, `vision-test`, `embed-test`, and native Ollama pass-through behavior.
+- Added `ollama vision-test MODEL --image PATH` with explicit image evidence.
+- Added joined answer/thinking artifacts from `/api/generate` streams.
+- Added category-aware gates: coding, essay, and internet/current-facts boundary.
+- Tightened `decision_grade` so ADOS/runtime recommendations require required capability gates.
+- Corrected context truth labels: skipped rows are not runtime-tested.
+- Replaced legacy Markdown exit-code parsing with `model-scorecard.csv` parsing.
+- Split aggregate output into balanced, TTFT, TPS, and context-only tables.
+- Rewrote README and Bash integration docs for v1.13 correctness.
+
 # CHANGELOG
 
 ## v1.10.0

@@ -1,9 +1,11 @@
-# Stress test report
+# Stress-test report v1.13
 
-Stress cases covered:
+Stress scenarios checked statically or by replay:
 
-1. `--full MODEL` parses without swallowing MODEL as an option value.
-2. `--min-context 65536` reaches summarizer and scorecard.
-3. one-token context output is not a pass.
-4. 65K context pass sets Hermes gate to PASS.
-5. aggregate recommendations separate coding, chat, Hermes main, Hermes fallback, ADOS, and heavy reasoning.
+1. Fresh shell integration: package Bash snippet defines `ollama()` wrapper and helper functions.
+2. Native command pass-through: wrapper intercept list excludes native commands such as `list`, `ps`, `pull`, and `run`.
+3. Missing vision image: `vision-test` fails with an explicit error before API call.
+4. Skipped context rows: replay confirms `CONTEXT_NOT_RUN_SKIPPED` and `context_65k_attempted=0`.
+5. Context-only aggregate: replay confirms no blank performance ranking is printed.
+6. Ambiguous internet-boundary row: replay downgrades decision-grade rather than overclaiming.
+7. Strict exit mode: shell checks `NEEDS_REVIEW` and `decision_grade` from `model-scorecard.csv`.

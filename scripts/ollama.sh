@@ -16,6 +16,7 @@ ollama.sh commands:
   diagnose MODEL [MODEL...] [opts]      full diagnostic alias; includes context testing
   context-test MODEL [MODEL...] --min-context 65536
                                         context-window validation only
+  vision-test MODEL --image PATH        explicit image/vision test through /api/generate
   bench MODEL [MODEL...] [opts]         role-aware route: generation -> test, embedding -> embed-test
   embed-test MODEL [MODEL...]           embedding/RAG benchmark through /api/embed
   preload MODEL [--ctx N] [--keep-alive V]
@@ -137,6 +138,7 @@ case "$cmd" in
   test|compare) aggregate_generation "$@" ;;
   diagnose) diagnose "$@" ;;
   context-test) context_test "$@" ;;
+  vision-test) exec "$SCRIPT_DIR/ollama-vision-test-RTX3090.sh" "$@" ;;
   embed-test) aggregate_embed "$@" ;;
   bench) aggregate_bench "$@" ;;
   preload)

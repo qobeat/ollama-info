@@ -1,7 +1,12 @@
-# Semantic replay report
+# Semantic replay report v1.13
 
-Replay scenario: a model returns HTTP 200 at 65K but emits one token.
-Expected: context verdict is short/inconclusive, Hermes main chat is not confirmed, settings are not HIGH_CONTEXT_CONFIRMED.
+v1.13 was replayed against uploaded v1.12 result folders to verify semantic changes without rerunning Ollama.
 
-Replay scenario: a model passes 65K with prompt fill, eval tokens, and visible output.
-Expected: Hermes main chat can be confirmed and settings can reach HIGH_CONTEXT_CONFIRMED.
+Expected semantic changes were observed:
+
+- v1.12 `FAIL`/skipped context presentation became `NOT_RUN_SKIPPED` when no 65K runtime row existed.
+- `Runtime >= required attempted` is `NO` for skipped-only rows.
+- Hermes/main-chat remains unconfirmed.
+- Existing ambiguous internet-boundary rows prevent decision-grade recommendations.
+- Aggregate recommendations do not select winners when decision-grade gates fail.
+- Aggregate next steps show an implemented vision command with required `--image`.
