@@ -1,14 +1,10 @@
-# Self-evaluation
+# Self-evaluation v1.11 final
 
-| Axis | Score | Verdict | Evidence |
-|---|---:|---|---|
-| Request fit | 9.0 | PASS | v1.10 baseline used; v1.11 addresses identified issues. |
-| Goal clarity | 9.0 | PASS | README and requirements.md define GOAL and Objectives. |
-| Decision integrity | 9.0 | PASS | Fail-closed logic suppresses unsupported winners. |
-| API correctness | 9.0 | PASS | Boolean `think:false` verified in payload. |
-| Settings integrity | 8.5 | PASS | Settings confidence and context validation fields added. |
-| Evidence coverage | 8.5 | PASS | Verification, stress/replay, ledger, and reflection included. |
-| Compaction | 9.0 | PASS | Runtime debris and caches excluded. |
-| Live performance proof | 6.5 | ADVISORY | Requires user host rerun; fake harness cannot prove RTX throughput. |
-
-Overall: PASS for package release; live model-selection decisions must be made from a fresh v1.11 host run.
+| Axis | Verdict | Evidence |
+|---|---|---|
+| Goal fit | PASS | Final patch directly protects the tool goal: model and setting recommendations must be evidence-backed. |
+| Measurement integrity | PASS | Short context rows are no longer valid context proof or speed evidence. |
+| Decision gating | PASS | Ranking remains gated by `ranking_allowed`; context confidence is separately gated by `context_validated`. |
+| Runtime usability | PASS | Routine `ollama test` defaults to resident-warm; full cold/context diagnostic is explicit via `ollama diagnose`. |
+| ADOS evidence discipline | PASS | Repair, verification, review, and reflection evidence are materialized. |
+| Remaining risk | ACCEPTED | Live RTX 3090 retest is still required to produce final model winners and settings. |

@@ -1,12 +1,12 @@
-Goal: repair v1.10 so ollama-info produces decision-grade model-selection and settings evidence.
+Goal: produce final v1.11 so ollama-info makes decision-grade model-selection and settings claims without being distorted by short context-pressure rows.
 
 Objectives:
-1. Use v1.10 package as baseline.
-2. Fix typed JSON serialization for Ollama think parameter.
-3. Capture API root errors in metrics and terminal summaries.
-4. Fail closed when no generation rows are valid.
-5. Suppress single-model and aggregate best-model recommendations unless evidence is decision-grade.
-6. Mark settings confidence and avoid unconfirmed context/KV claims.
-7. Rewrite README with GOAL, objectives, command semantics, modes, config interpretation, troubleshooting, and evidence model.
-8. Add requirements.md and update MANIFEST/SOURCE-OF-TRUTH for ADOS-style authority separation.
-9. Verify via syntax checks, fake success harness, fake failure harness, aggregate ranking harness, schema/JSONL checks, and package hygiene.
+1. Keep v1.11 package line and use the delivered v1.11 package as baseline.
+2. Preserve the typed JSON think fix and fail-closed recommendation policy.
+3. Classify context-pressure rows with insufficient output as INCONCLUSIVE / SHORT_CONTEXT_SAMPLE.
+4. Exclude context-pressure rows from visible-answer speed averages and aggregate ranking speed.
+5. Require context-pressure rows to meet minimum-output gates before `context_validated=1` or HIGH_CONFIRMED settings.
+6. Make routine `ollama test` fast/resident-warm by default; keep full empty-card + context-pressure diagnostics under `ollama diagnose` or `--mode diagnostic`.
+7. Update README so the command defaults, context gates, confidence rules, and troubleshooting are clear.
+8. Preserve ADOS-style authority/evidence surfaces and package hygiene.
+9. Verify syntax, summarizer gates, no impossible one-token speeds, settings confidence downgrade, aggregate ranking safety, JSON/JSONL validity, and extracted archive hygiene.

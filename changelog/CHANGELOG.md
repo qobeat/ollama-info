@@ -22,3 +22,10 @@
 - Added `recommended-ollama-env.conf` as the plain systemd drop-in output.
 - Rewrote README around GOAL, objectives, command modes, settings interpretation, and troubleshooting.
 - Added `requirements.md` as the durable goal/objective/requirement authority.
+
+## v1.11.0-final
+
+- Fixed the final context-pressure false-positive: HTTP 200 rows with only one/few generated tokens are now `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`.
+- Excluded context-pressure rows from `visible_tps_avg` and aggregate model ranking so impossible one-token speeds cannot select winners.
+- Context settings are confirmed only when minimum output gates pass; otherwise settings confidence is downgraded and context remains conservative.
+- Routine `ollama test` now defaults to resident-warm comparison to avoid repeated empty-card first-load cost; `ollama diagnose` runs the full long diagnostic.

@@ -3,8 +3,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ollama-common.sh"
-VERSION="1.11.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.11-fail-closed-typed-think-decision-grade"
+VERSION="1.11.0-final"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.11-final-context-gates-fast-default"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-and-monitor-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"

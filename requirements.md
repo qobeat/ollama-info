@@ -38,6 +38,7 @@ A release is inside the goal surface when it:
 | OBJ-05 | Surface root errors in terminal and scorecard outputs. | `RootErr` appears in `terminal-summary.txt`, `summary.md`, and `model-scorecard.csv`. |
 | OBJ-06 | Make README an operational authority. | README explains GOAL, objectives, commands, modes, settings confidence, decision-grade gating, and troubleshooting. |
 | OBJ-07 | Preserve ADOS evidence discipline. | QA evidence includes plan, atomic requirements, verification, stress/replay, self-evaluation, reflection, and evidence ledger. |
+| OBJ-08 | Prevent context-pressure false positives and reduce routine runtime. | One-token context rows are inconclusive, excluded from rankings/settings, and routine `ollama test` runs resident-warm unless full `diagnose` is requested. |
 
 ## Atomic requirements
 
@@ -51,3 +52,5 @@ A release is inside the goal surface when it:
 | AR-06 | Settings must declare confidence and avoid unconfirmed context/KV claims. | Scorecard includes `settings_confidence`, `context_validated`, and `kv_cache_type`. |
 | AR-07 | README must document command behavior and interpretation. | README review confirms command and configuration sections. |
 | AR-08 | Package must exclude runtime debris, caches, and nested ZIPs. | Package hygiene check passes. |
+| AR-09 | Context-pressure rows must meet minimum output gates before validating context or speed. | One-token HTTP 200 rows become `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`, with `context_validated=0`. |
+| AR-10 | Routine `ollama test` must avoid repeated empty-card first-load cost by default. | `ollama test` runs resident-warm unless `--mode diagnostic` or `ollama diagnose` is used. |

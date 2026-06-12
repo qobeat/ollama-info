@@ -11,8 +11,9 @@ usage(){ cat <<EOF_USAGE
 ollama.sh commands:
   status                         show Ollama/API/GPU status
   models                         list local models and roles
-  test MODEL [MODEL...] [opts]   generation diagnostics; multi-model creates one ZIP
-  compare MODEL [MODEL...] [opts] alias for multi-model generation comparison
+  test MODEL [MODEL...] [opts]   fast resident-warm generation comparison; multi-model creates one ZIP
+  diagnose MODEL [MODEL...]      full diagnostic: empty-card + resident-warm + context-pressure
+  compare MODEL [MODEL...] [opts] alias for fast multi-model generation comparison
   bench MODEL [MODEL...] [opts]  role-aware route: generation -> test, embedding -> embed-test
   embed-test MODEL [MODEL...]    embedding/RAG benchmark through /api/embed
   preload MODEL [--ctx N] [--keep-alive V]  preload and keep a model resident
@@ -193,6 +194,19 @@ PYB
   [[ "$failures" -eq 0 ]]
 }
 
+append_default_mode_if_absent(){
+  local default_mode="$1"; shift
+  local has_mode=0 arg
+  for arg in "$@"; do
+    case "$arg" in --mode|--quick|--resident-warm|--diagnostic) has_mode=1 ;; esac
+  done
+  if [[ "$has_mode" -eq 1 ]]; then
+    printf '%s\0' "$@"
+  else
+    printf '%s\0' "$@" --mode "$default_mode"
+  fi
+}
+
 case "$cmd" in
   status) ollama_status_short_common "$BASE_URL" ;;
   models) ollama_print_available_model_commands "$BASE_URL" "ollama test" ;;
@@ -200,7 +214,15 @@ case "$cmd" in
   logs) journalctl -u ollama.service -n "${1:-120}" --no-pager 2>/dev/null || true ;;
   start) sudo systemctl start ollama.service ;;
   stop) sudo systemctl stop ollama.service ;;
-  test|diagnose|compare) aggregate_generation "$@" ;;
+  test)
+    mapfile -d '' _args < <(append_default_mode_if_absent resident-warm "$@")
+    aggregate_generation "${_args[@]}" ;;
+  compare)
+    mapfile -d '' _args < <(append_default_mode_if_absent resident-warm "$@")
+    aggregate_generation "${_args[@]}" ;;
+  diagnose)
+    mapfile -d '' _args < <(append_default_mode_if_absent diagnostic "$@")
+    aggregate_generation "${_args[@]}" ;;
   embed-test) aggregate_embed "$@" ;;
   bench) aggregate_bench "$@" ;;
   preload)

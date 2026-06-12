@@ -109,19 +109,17 @@ Interpretation:
 
 ### `ollama.sh test MODEL`
 
-Runs the default generation diagnostic for one model.
+Runs the default fast resident-warm generation comparison for one model.
 
-Default lanes:
+Default lane:
 
 | Lane | Purpose |
 |---|---|
-| `empty-card` | Attempts to unload resident models and measures first-request load/TTFT. |
 | `resident-warm` | Preloads the model with `keep_alive` and runs ADOS capability prompts. |
-| `context-pressure` | Tests configured context steps and skips unsafe increases when VRAM is already critical. |
 | `settings` | Emits applyable Ollama service settings with confidence/rationale. |
 | `environment` | Logs Ollama version, service environment, WSL/kernel facts, GPU facts, and model metadata. |
 
-Use this when selecting a model or tuning a model for real work.
+Use this for routine model comparison after you know the host is healthy. It avoids paying empty-card first-load cost for every routine run. Use `ollama.sh diagnose MODEL` or `--mode diagnostic` when you need first-load and context-pressure proof.
 
 Main artifacts:
 
@@ -154,9 +152,23 @@ Important fields:
 
 ### `ollama.sh test MODEL --quick`
 
-Runs a shorter generation/capability check.
+Runs the shortest generation/capability check. This is equivalent to a compact resident-warm ADOS probe.
 
-Use it after a full diagnostic already established safe settings. Do not use a quick run alone to confirm final model selection or larger context settings.
+Use it for smoke checks. Do not use a quick run alone to confirm larger context settings.
+
+### `ollama.sh diagnose MODEL`
+
+Runs the full diagnostic suite:
+
+```text
+empty-card first-load
+resident-warm ADOS prompts
+context-pressure settings validation
+settings recommendation
+environment/runner evidence
+```
+
+Use this when selecting final settings for a model, investigating cold-load time, or deciding whether 8K/16K context is safe.
 
 ### `ollama.sh test MODEL --mode empty-card`
 
@@ -207,11 +219,18 @@ The tool skips higher steps when current VRAM is already critical unless you pas
 --force-context-pressure
 ```
 
-A larger context setting is confirmed only when a matching context-pressure row passes. If the row fails or is skipped, the setting is not marked tested/safe.
+A larger context setting is confirmed only when a matching context-pressure row passes the minimum-output gate. A row that returns HTTP 200 but generates only one or a few tokens is classified as `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`; it proves request acceptance only and does not validate speed or settings.
+
+Default minimum-output gate:
+
+```text
+eval_tokens >= 128
+response_chars >= 200
+```
 
 ### `ollama.sh test MODEL_A MODEL_B ...`
 
-Runs multi-model generation diagnostics and produces one aggregate ZIP.
+Runs multi-model resident-warm generation comparison and produces one aggregate ZIP. Use `ollama.sh diagnose MODEL_A MODEL_B ...` for the slower full diagnostic comparison with empty-card and context-pressure lanes.
 
 Aggregate artifacts:
 
@@ -370,7 +389,7 @@ Settings confidence:
 
 | Confidence | Meaning |
 |---|---|
-| `HIGH_CONFIRMED` | Required generation and context-pressure rows passed. |
+| `HIGH_CONFIRMED` | Required generation and context-pressure rows passed the minimum-output gates. |
 | `MEDIUM_PARTIAL` | Main generation evidence passed, but not all tuning dimensions are confirmed. |
 | `LOW_UNCONFIRMED` | A safe baseline was emitted, but no best-parameter claim is made. |
 
@@ -382,6 +401,12 @@ Do not apply a setting as “best” just because a file exists. Check `settings
 
 ```bash
 ollama.sh test qwen2.5-coder:7b
+```
+
+For full settings confirmation, run:
+
+```bash
+ollama.sh diagnose qwen2.5-coder:7b
 ```
 
 Review:
@@ -418,7 +443,7 @@ recommendations.md
 performance-settings-all.md
 ```
 
-A winner is valid only if the aggregate recommendation was generated from decision-grade rows.
+A winner is valid only if the aggregate recommendation was generated from decision-grade rows. Context-pressure rows are excluded from visible speed averages, so one-token long-context rows cannot inflate rankings.
 
 ### Embedding/RAG candidates
 
@@ -464,6 +489,7 @@ ollama-embed-test-RTX3090-bge-m3_latest-YYYYMMDD-HHMMSS.zip
 | `NO_MODEL_RANKING` | No valid generation evidence. | Do not use recommendations; repair first. |
 | `Visible: N/A` | No visible answer speed was measured. | Check thinking-only rows, API errors, and raw outputs. |
 | `CONTEXT_INCREASE_NOT_RECOMMENDED` | VRAM/offload/context evidence blocks context increase. | Keep baseline context or use smaller model. |
+| `CONTEXT_PRESSURE_INCONCLUSIVE` | Context row returned too little output to validate speed/settings. | Do not treat 8K/16K as confirmed; rerun diagnose with better prompt or larger budget if needed. |
 | `CPU_GPU_OFFLOAD_RISK` | Model does not fully fit as tested. | Reduce context, reduce parallelism, or use smaller/quantized model. |
 | `Settings confidence: LOW_UNCONFIRMED` | Config file is a safe baseline only. | Do not treat it as best parameters. |
 

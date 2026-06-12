@@ -1,8 +1,8 @@
-AR-01: serialize think=false as boolean false.
-AR-02: capture HTTP API error body and api_error string.
-AR-03: classify all-row API failures as TOOL_FAILURE.
-AR-04: emit NO_MODEL_RANKING and suppress recommendations with zero valid generation rows.
-AR-05: aggregate recommendations use only ranking_allowed=1 rows.
-AR-06: settings output includes context_validated and settings_confidence.
-AR-07: README explains GOAL, objectives, all commands, modes, and configuration nuance.
-AR-08: package hygiene excludes runtime and generated debris.
+AR-1: Context-pressure rows must require eval_tokens >= 128 and response_chars >= 120 to validate context settings.
+AR-2: Short context rows must not contribute to visible_tps_avg.
+AR-3: Short context rows must not set context_validated=1.
+AR-4: HIGH_CONFIRMED settings require decision-grade generation evidence and valid context-pressure evidence.
+AR-5: Aggregate ranking must use only ranking_allowed rows generated from non-context capability evidence.
+AR-6: Default `ollama test` must avoid full empty-card diagnostic runtime unless requested.
+AR-7: README must document the fast default, full diagnostic command, and context-pressure minimum-output gates.
+AR-8: Package evidence must record repair, verification, self-evaluation, and finalization facts.

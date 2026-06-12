@@ -4,15 +4,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ollama-common.sh"
 
-VERSION="1.11.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.11-fail-closed-typed-think-decision-grade"
+VERSION="1.11.0-final"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.11-final-context-gates-fast-default"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 MODEL_PATTERN=""
 MODEL=""
-MODE="diagnostic"
+MODE="${MODE:-resident-warm}"
 PROFILE="ados"
 NUM_CTX="${NUM_CTX:-4096}"
 NUM_PREDICT="${NUM_PREDICT:-1024}"
@@ -28,6 +28,8 @@ STRICT_EXIT=0
 FORCE_CONTEXT_PRESSURE=0
 CONTEXT_STEPS="${CONTEXT_STEPS:-4096,8192,16384}"
 THINK="${THINK:-false}"
+MIN_CONTEXT_EVAL_TOKENS="${MIN_CONTEXT_EVAL_TOKENS:-128}"
+MIN_CONTEXT_RESPONSE_CHARS="${MIN_CONTEXT_RESPONSE_CHARS:-200}"
 
 usage() {
   cat <<EOF_USAGE
@@ -38,9 +40,9 @@ Usage:
   ollama-test-RTX3090.sh MODEL [options]
 
 Default behavior:
-  Runs a mode-complete diagnostic for a generation model: empty-card first-load,
-  resident-warm ADOS capability prompts, safe context-pressure checks, environment
-  logging, performance settings, scorecard, and recommendations.
+  Runs resident-warm ADOS capability prompts for fast daily comparison. Use
+  `ollama diagnose MODEL` or `--mode diagnostic` for empty-card first-load and
+  safe context-pressure checks.
 
 Options:
   --model MODEL              Model or local pattern
@@ -48,7 +50,7 @@ Options:
   --profile PROFILE          ados|perf (default: ados)
   --num-ctx N                Baseline context (default: $NUM_CTX)
   --num-predict N            ADOS capability prediction length (default: $NUM_PREDICT)
-  --quick                    Shortcut for --mode quick --num-predict $QUICK_PREDICT
+  --quick                    Shortcut for a short resident-warm capability run
   --context-steps CSV        Context pressure steps (default: $CONTEXT_STEPS)
   --force-context-pressure   Run larger context steps even if VRAM is already critical
   --keep-alive VALUE         Ollama keep_alive for resident tests (default: $KEEP_ALIVE)
@@ -127,7 +129,7 @@ log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
 log "Model: $MODEL"
 log "Role: $ROLE"
-log "Plan: mode=$MODE profile=$PROFILE ctx=$NUM_CTX predict=$NUM_PREDICT think=$THINK keep_alive=$KEEP_ALIVE context_steps=$CONTEXT_STEPS evidence_level=$EVIDENCE_LEVEL"
+log "Plan: mode=$MODE profile=$PROFILE ctx=$NUM_CTX predict=$NUM_PREDICT think=$THINK keep_alive=$KEEP_ALIVE context_steps=$CONTEXT_STEPS evidence_level=$EVIDENCE_LEVEL min_context_eval=$MIN_CONTEXT_EVAL_TOKENS min_context_chars=$MIN_CONTEXT_RESPONSE_CHARS"
 
 ollama_status_short_common "$BASE_URL" | ollama_timestamp_stream || true
 ollama_capture_environment_summary "$RUN_DIR/environment-summary.md" "$RUN_DIR" "$MODEL" "$BASE_URL" || true
@@ -159,6 +161,7 @@ Mandatory gates:
 - generation models must produce visible output for capability rows.
 - thinking-only visible rows are not counted as visible-answer performance.
 - context increases are skipped when VRAM is already critical unless forced.
+- context-pressure rows require eval_tokens >= $MIN_CONTEXT_EVAL_TOKENS and response_chars >= $MIN_CONTEXT_RESPONSE_CHARS; shorter rows are INCONCLUSIVE and cannot validate settings.
 EOF_PLAN
 
 if [[ "$ROLE" == "embedding" ]]; then
@@ -251,6 +254,22 @@ PY
     jq -r '.chunk.response // ""' "$RUN_DIR/raw/${test}.ndjson" 2>/dev/null >"$text_file" || true
     if ! grep -Eiq "(cannot|can't|do not|don't|no live|no internet|not have).*(internet|web|browse|current|live)|without.*(browser|internet)" "$text_file"; then sample="NEEDS_REVIEW"; fi
   fi
+  # Final v1.11 context-pressure gate: accepting a large ctx with one token is not validation.
+  # Short context rows prove only request acceptance; they cannot confirm context settings or speed.
+  if [[ "$category" == "context" && "$state" == "PASS" ]]; then
+    if (( eval < MIN_CONTEXT_EVAL_TOKENS || resp < MIN_CONTEXT_RESPONSE_CHARS )); then
+      state="INCONCLUSIVE"
+      sample="SHORT_CONTEXT_SAMPLE"
+      notes="$notes min_context_eval=$MIN_CONTEXT_EVAL_TOKENS min_context_chars=$MIN_CONTEXT_RESPONSE_CHARS"
+      vis=""
+      raw=""
+    fi
+  fi
+  if [[ -n "$vis" && "$eval" -gt 0 && "$eval" -lt 8 ]]; then
+    # Hard guard against distorted rates from tiny final-duration rows.
+    vis=""
+    raw=""
+  fi
   printf '%s,%s,%s,%s,/api/generate,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$ts" "$test" "$mode" "$category" "$state" "$sample" "$ctx" "$predict" "$prompt" "$eval" "$raw" "$vis" "$ttfta" "$ttftans" "$loads" "$totals" "$resp" "$think" "$thinkonly" "$http" "$done" "$(printf '%s' "$notes" | tr ',' ';')" >>"$SUMMARY_CSV"
 }
@@ -273,7 +292,14 @@ run_generate_row() {
   fi
   "$SCRIPT_DIR/ollama-run-generate.py" --base-url "$BASE_URL" --payload "$payload" --raw "$raw" --metrics "$metrics" --http-file "$http" --stderr-file "$err" --timeout "$TIMEOUT_SEC" || true
   append_row_from_metrics "$test" "$mode" "$category" "$ctx" "$predict" "$metrics" "$notes"
-  log "DONE  $test http=$(cat "$http" 2>/dev/null || echo 0) eval=$(jq -r '.eval_tokens // 0' "$metrics") visible_tps=$(jq -r '.visible_answer_tps // ""' "$metrics") ttft=$(jq -r '.ttft_answer_ms // ""' "$metrics")"
+  local done_eval done_vis done_ttft
+  done_eval="$(jq -r '.eval_tokens // 0' "$metrics")"
+  done_vis="$(jq -r '.visible_answer_tps // ""' "$metrics")"
+  done_ttft="$(jq -r '.ttft_answer_ms // ""' "$metrics")"
+  if [[ "$category" == "context" && "$done_eval" -lt "$MIN_CONTEXT_EVAL_TOKENS" ]]; then
+    done_vis="SHORT_SAMPLE"
+  fi
+  log "DONE  $test http=$(cat "$http" 2>/dev/null || echo 0) eval=$done_eval visible_tps=$done_vis ttft=$done_ttft"
 }
 
 skip_row() {
@@ -310,12 +336,16 @@ run_resident_warm_lane() {
 }
 
 run_context_pressure_lane() {
-  log "ContextPressure: steps=$CONTEXT_STEPS"
-  local step idx=0 vram prompt
+  log "ContextPressure: steps=$CONTEXT_STEPS min_eval=$MIN_CONTEXT_EVAL_TOKENS min_chars=$MIN_CONTEXT_RESPONSE_CHARS"
+  local step idx=0 vram prompt halted=0
   IFS=',' read -r -a steps <<< "$CONTEXT_STEPS"
   for step in "${steps[@]}"; do
     [[ -n "$step" ]] || continue
     idx=$((idx+1))
+    if [[ "$halted" -eq 1 ]]; then
+      skip_row "1${idx}_context_${step}" "context-pressure" "context" "$step" "256" "skipped because a lower context step was inconclusive; use --force-context-pressure to continue"
+      continue
+    fi
     vram="$(current_vram_pct)"
     if [[ "$FORCE_CONTEXT_PRESSURE" -ne 1 && "$step" -gt "$NUM_CTX" ]]; then
       if awk -v v="$vram" 'BEGIN{exit !(v>97)}'; then
@@ -325,12 +355,19 @@ run_context_pressure_lane() {
     fi
     prompt="$(make_long_prompt $(( step / 6 )))"
     run_generate_row "1${idx}_context_${step}" "context-pressure" "context" "$step" "256" "$prompt" "context pressure step; pre_step_vram_pct=$vram"
+    local metrics="$RAW_DIR/1${idx}_context_${step}.metrics.json" eval resp http
+    http="$(jq -r '.http_code // 0' "$metrics" 2>/dev/null || echo 0)"
+    eval="$(jq -r '.eval_tokens // 0' "$metrics" 2>/dev/null || echo 0)"
+    resp="$(jq -r '.response_chars // 0' "$metrics" 2>/dev/null || echo 0)"
+    if [[ "$http" -ge 400 || "$eval" -lt "$MIN_CONTEXT_EVAL_TOKENS" || "$resp" -lt "$MIN_CONTEXT_RESPONSE_CHARS" ]]; then
+      halted=1
+    fi
   done
 }
 
 case "$MODE" in
   diagnostic) run_empty_card_lane; run_resident_warm_lane; run_context_pressure_lane ;;
-  quick) run_empty_card_lane; run_resident_warm_lane ;;
+  quick) run_resident_warm_lane ;;
   empty-card) run_empty_card_lane ;;
   resident-warm) run_resident_warm_lane ;;
   context-pressure) run_context_pressure_lane ;;

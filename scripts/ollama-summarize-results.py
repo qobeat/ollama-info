@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarize ollama-info generation diagnostics.
 
-v1.11 policy:
+Final v1.11 policy:
 - fail closed when all real generation rows fail;
 - never rank models or mark settings as tested when required evidence is absent;
 - separate preload/residency evidence from generation/context evidence;
@@ -57,16 +57,39 @@ def read_text(path):
         return ''
 
 # Evidence partitions.
+# Final v1.11 gates deliberately separate capability throughput from context-pressure proof.
+# Context rows are never allowed to inflate visible_tps_avg, and one-token context rows
+# cannot validate 8K/16K settings.
+MIN_CONTEXT_EVAL_TOKENS = 128
+MIN_CONTEXT_RESPONSE_CHARS = 120
 non_skipped = [r for r in rows if r.get('result_state') != 'SKIPPED']
 api_error_rows = [r for r in rows if r.get('result_state') == 'FAIL' or fnum(r.get('http'), 0) >= 400]
 ok_rows = [r for r in rows if r.get('result_state') == 'PASS' and r.get('sample_status') == 'OK']
-visible_rows = [r for r in ok_rows if fnum(r.get('visible_answer_tps')) is not None and inum(r.get('response_chars')) > 0]
-warm_rows = [r for r in visible_rows if r.get('mode') == 'resident-warm']
-capability_rows = [r for r in visible_rows if r.get('category') in ('coding', 'essay', 'internet_access')]
-context_rows = [r for r in visible_rows if r.get('mode') == 'context-pressure' or r.get('category') == 'context']
-valid_generation_rows = len(visible_rows)
+
+def is_context_row(r):
+    return r.get('mode') == 'context-pressure' or r.get('category') == 'context'
+
+def enough_visible(r, min_eval=8, min_chars=80):
+    return (fnum(r.get('visible_answer_tps')) is not None
+            and inum(r.get('response_chars')) >= min_chars
+            and inum(r.get('eval_tokens')) >= min_eval)
+
+def valid_context(r):
+    return (is_context_row(r)
+            and r.get('result_state') == 'PASS'
+            and r.get('sample_status') == 'OK'
+            and fnum(r.get('visible_answer_tps')) is not None
+            and inum(r.get('response_chars')) >= MIN_CONTEXT_RESPONSE_CHARS
+            and inum(r.get('eval_tokens')) >= MIN_CONTEXT_EVAL_TOKENS)
+
+capability_rows = [r for r in ok_rows if (not is_context_row(r)) and r.get('category') in ('coding', 'essay', 'internet_access') and enough_visible(r)]
+warm_rows = [r for r in capability_rows if r.get('mode') == 'resident-warm']
+context_rows = [r for r in rows if valid_context(r)]
+visible_rows = capability_rows
+valid_generation_rows = len(capability_rows) + len(context_rows)
 valid_capability_rows = len(capability_rows)
 valid_context_rows = len(context_rows)
+short_context_rows = sum(1 for r in rows if is_context_row(r) and r.get('sample_status') in ('SHORT_CONTEXT_SAMPLE','SHORT_SAMPLE') or (is_context_row(r) and fnum(r.get('http'),0) == 200 and inum(r.get('eval_tokens')) and inum(r.get('eval_tokens')) < MIN_CONTEXT_EVAL_TOKENS))
 unsupported = sum(1 for r in rows if r.get('result_state') == 'UNSUPPORTED')
 skipped = sum(1 for r in rows if r.get('result_state') == 'SKIPPED')
 thinking_only = sum(1 for r in rows if r.get('thinking_only') in ('1', 'true', 'True'))
@@ -79,7 +102,7 @@ first_load = fnum(first.get('load_s'))
 if first_load == 0 and fnum(first.get('http'), 0) >= 400:
     first_load = None
 warm_ttft = mean([fnum(r.get('ttft_answer_ms')) for r in warm_rows])
-visible_tps = mean([fnum(r.get('visible_answer_tps')) for r in visible_rows])
+visible_tps = mean([fnum(r.get('visible_answer_tps')) for r in warm_rows]) or mean([fnum(r.get('visible_answer_tps')) for r in capability_rows])
 
 # Root API errors from row notes and metrics sidecars.
 root_errors = []
@@ -161,6 +184,8 @@ if thinking_only or fail_visible:
     classifications.append('THINKING_ONLY_OUTPUT_RISK')
 if unsupported:
     classifications.append('UNSUPPORTED_IN_GENERATION_TEST')
+if short_context_rows:
+    classifications.append('CONTEXT_PRESSURE_INCONCLUSIVE')
 if api_error_rows and valid_generation_rows == 0:
     classifications += ['NO_VALID_GENERATION_ROWS', 'NO_MODEL_RANKING']
 
@@ -173,7 +198,7 @@ elif api_error_rows and valid_generation_rows == 0:
     status = 'TOOL_FAILURE'
 elif api_error_rows and valid_generation_rows > 0:
     status = 'PARTIAL_FAIL_REVIEW'
-elif fail_visible or thinking_only:
+elif fail_visible or thinking_only or short_context_rows:
     status = 'PASS_WITH_REVIEW'
 elif vram_pct is not None and vram_pct > 92:
     status = 'PASS_WITH_WARNINGS'
@@ -185,7 +210,7 @@ else:
 decision_grade = status.startswith('PASS') and valid_capability_rows >= 1 and valid_generation_rows >= 1
 context_validated = valid_context_rows > 0
 ranking_allowed = decision_grade and valid_generation_rows > 0
-settings_confidence = 'HIGH_CONFIRMED' if (decision_grade and context_validated and not api_error_rows) else ('MEDIUM_PARTIAL' if decision_grade else 'LOW_UNCONFIRMED')
+settings_confidence = 'HIGH_CONFIRMED' if (decision_grade and context_validated and not api_error_rows and short_context_rows == 0) else ('MEDIUM_PARTIAL' if decision_grade else 'LOW_UNCONFIRMED')
 
 # Settings policy: do not call a setting tested/safe unless supporting rows passed.
 def int_ctx(x):
@@ -212,9 +237,9 @@ rationale = []
 if not decision_grade:
     rationale.append('No decision-grade generation evidence was produced; settings are a safe baseline, not confirmed best parameters.')
 if context_validated:
-    rationale.append(f'Context {ctx_rec} was supported by a passing context-pressure row.')
+    rationale.append(f'Context {ctx_rec} was supported by a passing context-pressure row with enough generated output.')
 else:
-    rationale.append(f'Context {ctx_rec} is a conservative baseline because no context-pressure row passed.')
+    rationale.append(f'Context {ctx_rec} is a conservative baseline because no context-pressure row passed the minimum-output gate.')
 if 'VRAM_CRITICAL_HEADROOM' in classifications:
     rationale.append('VRAM exceeded 97%; keep one model loaded, one parallel request, and conservative context.')
 elif vram_pct is not None and vram_pct < 75 and context_validated:
@@ -286,6 +311,7 @@ Apply with:
 ## Safety notes
 
 - Settings are confirmed only when generation rows and required context-pressure rows pass.
+- Context-pressure validation requires at least 128 eval tokens and 120 response characters; shorter rows are inconclusive.
 - `OLLAMA_MAX_LOADED_MODELS=1` is the safe RTX 3090 default for large-model evaluation.
 - `OLLAMA_NUM_PARALLEL=1` protects KV-cache VRAM headroom until a concurrency-specific benchmark passes.
 - `OLLAMA_CONTEXT_LENGTH={ctx_rec}` is marked confirmed only when `context_validated=true` in `model-scorecard.csv`.
@@ -388,7 +414,7 @@ vram_s = 'N/A' if vram_pct is None else f'{vram_pct:.1f}%'
 summary = f'''# RTX 3090 Ollama Test Summary
 
 ## Run metadata
-- script_version: 1.11
+- script_version: 1.11-final
 - model: {args.model}
 - role: {args.role}
 - mode: {args.mode}
@@ -407,6 +433,7 @@ summary = f'''# RTX 3090 Ollama Test Summary
 - Valid generation rows: {valid_generation_rows}
 - Valid capability rows: {valid_capability_rows}
 - Valid context rows: {valid_context_rows}
+- Short/inconclusive context rows: {short_context_rows}
 - API error rows: {len(api_error_rows)}
 - Root error: {root_error or 'none captured'}
 - Classifications: {', '.join(classifications) if classifications else 'NONE'}
@@ -443,7 +470,7 @@ WarmTTFT: {warm_ttft_s}
 Visible : {vis_s}
 Residency: {residency}
 VRAM    : {vram_s}
-ValidRows: generation={valid_generation_rows} capability={valid_capability_rows} context={valid_context_rows}
+ValidRows: generation={valid_generation_rows} capability={valid_capability_rows} context={valid_context_rows} short_context={short_context_rows}
 RootErr : {root_error or 'none captured'}
 Class   : {', '.join(classifications) if classifications else 'NONE'}
 Settings: {settings_sh} confidence={settings_confidence}

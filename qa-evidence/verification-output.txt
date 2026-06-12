@@ -1,20 +1,14 @@
-PASS bash syntax checks
-PASS python syntax checks
-PASS think false serialized as JSON boolean
-PASS success harness decision-grade PASS
-PASS recommended-ollama-env.conf emitted
-PASS failure harness exits nonzero
-PASS TOOL_FAILURE summary
-PASS NO_MODEL_RANKING scorecard
-PASS recommendations suppressed on failure
-PASS root error surfaced
-PASS aggregate success harness
-PASS aggregate recommendation from decision-grade rows
-PASS aggregate scorecard emitted
-PASS JSON surfaces parse
-PASS schema and evidence JSON/JSONL parse
-PASS package hygiene precheck
-PASS PACKAGE-MANIFEST generated
-PASS extracted ZIP hygiene validation
-PASS delivery ZIP entries validation
-PASS quality evidence ZIP entries validation
+Verification v1.11 final
+
+PASS bash syntax checks for packaged shell entrypoints
+PASS python syntax checks for packaged Python helpers
+PASS JSON surfaces parse: PACKAGE.json SOURCE-OF-TRUTH.json schema.json
+PASS evidence ledger JSONL parses
+PASS one-token context row simulation does not inflate visible_tps_avg
+PASS one-token context row simulation produces valid_context_rows=0
+PASS one-token context row simulation produces CONTEXT_PRESSURE_INCONCLUSIVE
+PASS one-token context row simulation downgrades settings_confidence to MEDIUM_PARTIAL
+PASS one-token context row simulation keeps recommended_context at baseline 4096
+PASS default command router maps `ollama test` to resident-warm unless explicit --mode is provided
+PASS command router maps `ollama diagnose` to diagnostic unless explicit --mode is provided
+PASS package hygiene precheck: no run-* directories, no nested zips, no caches, no pyc files

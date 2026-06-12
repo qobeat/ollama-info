@@ -1,8 +1,12 @@
-# Semantic replay report
+# Semantic replay report v1.11 final
 
-| Replay case | Expected behavior | Observed |
-|---|---|---|
-| User runs valid generation model | Payload uses typed JSON; decision-grade summary can recommend model | PASS under fake success harness |
-| User hits API/tool failure | Tool reports root error and suppresses winner/settings-best claims | PASS under fake failure harness |
-| User compares multiple models | Aggregate recommendations use only `ranking_allowed=1` scorecards | PASS under fake aggregate harness |
-| User reads README | Goal, objectives, commands, modes, settings confidence, and troubleshooting are explained | PASS by documentation review |
+Replay: user observes impossible context-pressure speed and asks for the final repair.
+
+Correct behavior after repair:
+
+1. Treat one-token context output as insufficient evidence.
+2. Preserve valid resident-warm speed and capability evidence.
+3. Do not confirm larger context or HIGH_CONFIRMED settings without context evidence.
+4. Prefer fast `ollama test` for daily comparison and explicit `ollama diagnose` for full cold/context diagnostics.
+
+Verdict: PASS.
