@@ -24,6 +24,8 @@ chunks = 0
 last = {}
 http = 0
 err = ''
+error_body = ''
+api_error = ''
 try:
     with urllib.request.urlopen(req, timeout=args.timeout) as resp, open(args.raw, 'w', encoding='utf-8') as raw:
         http = getattr(resp, 'status', 200)
@@ -58,6 +60,12 @@ except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
     except Exception:
         body = ''
+    error_body = body
+    try:
+        parsed = json.loads(body) if body else {}
+        api_error = str(parsed.get('error') or parsed.get('message') or '')
+    except Exception:
+        api_error = body.strip()[:500]
     with open(args.raw, 'w', encoding='utf-8') as raw:
         raw.write(body)
     err = str(e)
@@ -102,6 +110,8 @@ metrics = {
     'done_reason': last.get('done_reason') or last.get('done') or '',
     'last': last,
     'error': err,
+    'api_error': api_error,
+    'error_body': error_body[:2000] if error_body else '',
 }
 with open(args.metrics, 'w', encoding='utf-8') as f:
     json.dump(metrics, f, indent=2, ensure_ascii=False)

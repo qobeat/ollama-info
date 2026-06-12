@@ -2,15 +2,16 @@
   "package_id": "ollama-info",
   "project_name": "ollama-info RTX 3090 Ollama Diagnostic Toolkit",
   "project_slug": "ollama-info",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "status": "implementation-ready",
   "package_type": "local-ai-playground-diagnostic-toolkit",
-  "delivery_package_name": "ollama-info-v1.10.zip",
-  "evidence_package_name": "ollama-info-v1.10-quality-evidence.zip",
-  "source_location": "available source package plus attached v1.9 run artifacts",
+  "delivery_package_name": "ollama-info-v1.11.zip",
+  "evidence_package_name": "ollama-info-v1.11-quality-evidence.zip",
+  "source_location": "ollama-info-v1.10.zip supplied by user as baseline",
   "compaction_constraints": {
     "exclude_runtime_runs": true,
     "exclude_nested_archives": true,
-    "exclude_caches": true
+    "exclude_caches": true,
+    "exclude_unrelated_generated_artifacts": true
   }
 }

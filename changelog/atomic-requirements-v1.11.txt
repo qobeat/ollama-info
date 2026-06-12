@@ -1,0 +1,8 @@
+AR-01: serialize think=false as boolean false.
+AR-02: capture HTTP API error body and api_error string.
+AR-03: classify all-row API failures as TOOL_FAILURE.
+AR-04: emit NO_MODEL_RANKING and suppress recommendations with zero valid generation rows.
+AR-05: aggregate recommendations use only ranking_allowed=1 rows.
+AR-06: settings output includes context_validated and settings_confidence.
+AR-07: README explains GOAL, objectives, all commands, modes, and configuration nuance.
+AR-08: package hygiene excludes runtime and generated debris.

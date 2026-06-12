@@ -12,6 +12,7 @@ ollama.sh commands:
   status                         show Ollama/API/GPU status
   models                         list local models and roles
   test MODEL [MODEL...] [opts]   generation diagnostics; multi-model creates one ZIP
+  compare MODEL [MODEL...] [opts] alias for multi-model generation comparison
   bench MODEL [MODEL...] [opts]  role-aware route: generation -> test, embedding -> embed-test
   embed-test MODEL [MODEL...]    embedding/RAG benchmark through /api/embed
   preload MODEL [--ctx N] [--keep-alive V]  preload and keep a model resident
@@ -50,43 +51,54 @@ aggregate_generation(){
     status="UNKNOWN"
     [[ -f "$score" ]] && status="$(awk -F, 'NR==2{print $3}' "$score")"
     [[ "$role" == "embedding" && "$rc" -eq 2 ]] && unsupported=$((unsupported+1))
-    [[ "$rc" -ne 0 && "$rc" -ne 2 ]] && failures=$((failures+1))
+    if [[ "$rc" -ne 0 && "$rc" -ne 2 ]]; then failures=$((failures+1)); fi
+    case "$status" in TOOL_FAILURE|FAIL|NO_ROWS) failures=$((failures+1));; esac
     echo "$resolved,$role,$status,$subrun,$score,$settings" >>"$agg/multi-model-index.csv"
     { echo "## $resolved"; echo; [[ -f "$subrun/terminal-summary.txt" ]] && sed 's/^/    /' "$subrun/terminal-summary.txt"; echo; } >>"$agg/multi-model-summary.md"
   done
   python3 - <<'PY' "$agg"
-import csv,sys,glob,os
+import csv, sys
 from pathlib import Path
-agg=Path(sys.argv[1])
-rows=[]
-for p in agg.glob('runs/run-*/model-scorecard.csv'):
-    with p.open(newline='',encoding='utf-8') as f:
-        rr=list(csv.DictReader(f))
+agg = Path(sys.argv[1])
+rows = []
+for p in sorted(agg.glob('runs/run-*/model-scorecard.csv')):
+    with p.open(newline='', encoding='utf-8') as f:
+        rr = list(csv.DictReader(f))
         if rr:
-            rr[0]['scorecard_path']=str(p); rows.append(rr[0])
-cols=['model','role','status','mode','residency','classifications','first_ttft_ms','first_load_s','warm_ttft_ms_avg','visible_tps_avg','vram_pct','recommended_context','keep_alive','max_loaded_models','num_parallel','flash_attention','kv_cache_type','scorecard_path']
-with (agg/'model-scorecard.csv').open('w',newline='',encoding='utf-8') as f:
-    w=csv.DictWriter(f,fieldnames=cols); w.writeheader(); w.writerows(rows)
-# Simple use-case recommendations.
-def num(x):
-    try: return float(x)
-    except: return -1
-visible=[r for r in rows if r.get('role')=='generate' and 'CPU_GPU_OFFLOAD_RISK' not in r.get('classifications','')]
-best_fast=sorted(visible,key=lambda r:(num(r.get('warm_ttft_ms_avg')) if num(r.get('warm_ttft_ms_avg'))>=0 else 999999, -num(r.get('visible_tps_avg'))))[:1]
-best_code=sorted(visible,key=lambda r:-num(r.get('visible_tps_avg')))[:1]
-best_general=sorted(visible,key=lambda r:(('THINKING_ONLY_OUTPUT_RISK' in r.get('classifications','')), num(r.get('vram_pct')) if num(r.get('vram_pct'))>=0 else 999, -num(r.get('visible_tps_avg'))))[:1]
-md=['# Aggregate recommendations','']
-md.append(f"OpenCode/Cursor fast coding: `{best_code[0]['model']}`" if best_code else 'OpenCode/Cursor: no generation candidate')
-md.append(f"Hermes/ADOS balanced runtime: `{best_general[0]['model']}`" if best_general else 'Hermes/ADOS: no generation candidate')
-md.append('')
-md.append('Primary applyable settings are in each sub-run `performance-settings.sh`; compare all rows in `model-scorecard.csv`.')
-(agg/'recommendations.md').write_text('\n'.join(md)+'\n')
-# Concatenate setting snippets for convenience.
-out=['# Performance settings by model','']
+            r = dict(rr[0]); r['scorecard_path'] = str(p); rows.append(r)
+base_cols = ['model','role','status','decision_grade','mode','residency','classifications','valid_generation_rows','valid_capability_rows','valid_context_rows','api_error_rows','root_error','first_ttft_ms','first_load_s','warm_ttft_ms_avg','visible_tps_avg','vram_pct','recommended_context','context_validated','settings_confidence','keep_alive','max_loaded_models','num_parallel','flash_attention','kv_cache_type','ranking_allowed','scorecard_path']
+cols = base_cols + sorted({k for r in rows for k in r if k not in base_cols})
+with (agg/'model-scorecard.csv').open('w', newline='', encoding='utf-8') as f:
+    w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(rows)
+def num(x, default=None):
+    try:
+        if x in ('', None): return default
+        return float(x)
+    except Exception:
+        return default
+eligible = [r for r in rows if r.get('role') == 'generate' and r.get('ranking_allowed') in ('1','true','True') and r.get('status','').startswith('PASS')]
+code_eligible = [r for r in eligible if num(r.get('visible_tps_avg'), -1) is not None and num(r.get('visible_tps_avg'), -1) >= 0 and 'THINKING_ONLY_OUTPUT_RISK' not in r.get('classifications','')]
+general_eligible = [r for r in eligible if 'CPU_GPU_OFFLOAD_RISK' not in r.get('classifications','') and 'THINKING_ONLY_OUTPUT_RISK' not in r.get('classifications','')]
+best_code = sorted(code_eligible, key=lambda r: (-num(r.get('visible_tps_avg'), -1), num(r.get('warm_ttft_ms_avg'), 999999), num(r.get('vram_pct'), 999)))[:1]
+best_general = sorted(general_eligible, key=lambda r: (num(r.get('warm_ttft_ms_avg'), 999999), num(r.get('vram_pct'), 999), -num(r.get('visible_tps_avg'), -1)))[:1]
+md = ['# Aggregate recommendations','']
+if not eligible:
+    md += [
+        'No aggregate winner is emitted because no model produced decision-grade generation evidence.',
+        '',
+        'Repair root errors and rerun before selecting OpenCode, Cursor, Hermes, or ADOS winners.',
+    ]
+else:
+    md.append(f"OpenCode/Cursor fast coding: `{best_code[0]['model']}`" if best_code else 'OpenCode/Cursor: no decision-grade coding candidate')
+    md.append(f"Hermes/ADOS balanced runtime: `{best_general[0]['model']}`" if best_general else 'Hermes/ADOS: no decision-grade general candidate')
+md += ['', 'Primary applyable settings are in each sub-run `performance-settings.sh`; compare all rows in `model-scorecard.csv`.']
+(agg/'recommendations.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
+out = ['# Performance settings by model','']
 for r in rows:
-    settings=Path(r['scorecard_path']).parent/'performance-settings.md'
-    if settings.exists(): out.append(settings.read_text())
-(agg/'performance-settings-all.md').write_text('\n\n---\n\n'.join(out))
+    settings = Path(r['scorecard_path']).parent / 'performance-settings.md'
+    if settings.exists():
+        out.append(settings.read_text(encoding='utf-8', errors='ignore'))
+(agg/'performance-settings-all.md').write_text('\n\n---\n\n'.join(out), encoding='utf-8')
 PY
   local archive="$TMP_DIR/ollama-test-and-monitor-RTX3090-${#MODELS[@]}models-$run_id.zip"
   (cd "$(dirname "$agg")" && zip -qr "$archive" "$(basename "$agg")")
@@ -188,7 +200,7 @@ case "$cmd" in
   logs) journalctl -u ollama.service -n "${1:-120}" --no-pager 2>/dev/null || true ;;
   start) sudo systemctl start ollama.service ;;
   stop) sudo systemctl stop ollama.service ;;
-  test|diagnose) aggregate_generation "$@" ;;
+  test|diagnose|compare) aggregate_generation "$@" ;;
   embed-test) aggregate_embed "$@" ;;
   bench) aggregate_bench "$@" ;;
   preload)

@@ -4,8 +4,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ollama-common.sh"
 
-VERSION="1.10.0"
-SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.10-mode-complete-settings-tuning"
+VERSION="1.11.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_RTX3090_SCRIPT_SIGNATURE=v1.11-fail-closed-typed-think-decision-grade"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
@@ -127,7 +127,7 @@ log "$SCRIPT_SIGNATURE"
 log "Run dir: $RUN_DIR"
 log "Model: $MODEL"
 log "Role: $ROLE"
-log "Plan: mode=$MODE profile=$PROFILE ctx=$NUM_CTX predict=$NUM_PREDICT keep_alive=$KEEP_ALIVE context_steps=$CONTEXT_STEPS evidence_level=$EVIDENCE_LEVEL"
+log "Plan: mode=$MODE profile=$PROFILE ctx=$NUM_CTX predict=$NUM_PREDICT think=$THINK keep_alive=$KEEP_ALIVE context_steps=$CONTEXT_STEPS evidence_level=$EVIDENCE_LEVEL"
 
 ollama_status_short_common "$BASE_URL" | ollama_timestamp_stream || true
 ollama_capture_environment_summary "$RUN_DIR/environment-summary.md" "$RUN_DIR" "$MODEL" "$BASE_URL" || true
@@ -146,6 +146,7 @@ mode: $MODE
 profile: $PROFILE
 baseline_context: $NUM_CTX
 prediction_length: $NUM_PREDICT
+think: $THINK
 context_steps: $CONTEXT_STEPS
 
 Selected lanes:
@@ -212,7 +213,12 @@ append_row_from_metrics() {
   done="$(jq -r '.done_reason // ""' "$metrics" | tr ',' ';')"
   ts="$(ollama_now_iso)"
   state="PASS"; sample="OK"
-  if [[ "$http" -ge 400 || "$http" -eq 0 ]]; then state="FAIL"; sample="API_ERROR"; fi
+  if [[ "$http" -ge 400 || "$http" -eq 0 ]]; then
+    state="FAIL"; sample="API_ERROR"
+    local api_error
+    api_error="$(jq -r '.api_error // .error_body // .error // ""' "$metrics" 2>/dev/null | tr '\n,' '  ' | sed 's/  */ /g; s/"/'"'"'/g' | cut -c1-240)"
+    [[ -n "$api_error" ]] && notes="$notes api_error=$api_error"
+  fi
   if [[ "$thinkonly" == "1" ]]; then sample="FAIL_VISIBLE_OUTPUT"; state="INCONCLUSIVE"; fi
   if [[ "$resp" -eq 0 && "$think" -gt 0 ]]; then sample="FAIL_VISIBLE_OUTPUT"; state="INCONCLUSIVE"; fi
   if [[ "$resp" -lt 80 && "$category" != context* && "$state" == "PASS" ]]; then sample="NEEDS_REVIEW"; fi
@@ -253,9 +259,14 @@ run_generate_row() {
   local test="$1" mode="$2" category="$3" ctx="$4" predict="$5" prompt="$6" notes="${7:-}"
   local payload="$PAYLOAD_DIR/${test}.json" raw="$RAW_DIR/${test}.ndjson" metrics="$RAW_DIR/${test}.metrics.json" http="$RAW_DIR/${test}.http" err="$RAW_DIR/${test}.stderr"
   log "START $test: mode=$mode category=$category model=$MODEL ctx=$ctx predict=$predict"
-  if [[ "$THINK" == "none" ]]; then
+  # v1.11: serialize think as a typed JSON value. v1.10 sent "false" as a string,
+  # which Ollama rejects with: invalid think value: "false".
+  if [[ "$THINK" == "none" || -z "$THINK" ]]; then
     jq -nc --arg model "$MODEL" --arg prompt "$prompt" --arg keep_alive "$KEEP_ALIVE" --argjson ctx "$ctx" --argjson predict "$predict" --argjson temp "$TEMPERATURE" \
       '{model:$model,prompt:$prompt,stream:true,keep_alive:$keep_alive,options:{num_ctx:$ctx,num_predict:$predict,temperature:$temp}}' >"$payload"
+  elif [[ "$THINK" == "true" || "$THINK" == "false" ]]; then
+    jq -nc --arg model "$MODEL" --arg prompt "$prompt" --arg keep_alive "$KEEP_ALIVE" --argjson think "$THINK" --argjson ctx "$ctx" --argjson predict "$predict" --argjson temp "$TEMPERATURE" \
+      '{model:$model,prompt:$prompt,stream:true,keep_alive:$keep_alive,think:$think,options:{num_ctx:$ctx,num_predict:$predict,temperature:$temp}}' >"$payload"
   else
     jq -nc --arg model "$MODEL" --arg prompt "$prompt" --arg keep_alive "$KEEP_ALIVE" --arg think "$THINK" --argjson ctx "$ctx" --argjson predict "$predict" --argjson temp "$TEMPERATURE" \
       '{model:$model,prompt:$prompt,stream:true,keep_alive:$keep_alive,think:$think,options:{num_ctx:$ctx,num_predict:$predict,temperature:$temp}}' >"$payload"
@@ -373,7 +384,12 @@ if [[ "$ZIP_ON_EXIT" -eq 1 ]]; then
   log "zip: $ARCHIVE_PATH"
 fi
 
+SUMMARY_STATUS="$(awk -F': ' '/^- status:/{print $2; exit}' "$RUN_DIR/summary.md" 2>/dev/null || true)"
 if [[ "$STRICT_EXIT" -eq 1 ]]; then
   if grep -q ',FAIL,' "$SUMMARY_CSV" || grep -q 'FAIL_VISIBLE_OUTPUT' "$SUMMARY_CSV"; then exit 1; fi
 fi
-exit 0
+case "$SUMMARY_STATUS" in
+  TOOL_FAILURE|FAIL|NO_ROWS) exit 1 ;;
+  UNSUPPORTED) exit 2 ;;
+  *) exit 0 ;;
+esac

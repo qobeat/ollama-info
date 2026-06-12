@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "checks": [
+    "syntax",
+    "fake-harness",
+    "schema-jsonl",
+    "package-hygiene"
+  ],
+  "critical_findings": []
+}

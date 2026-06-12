@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-import argparse, csv, json, os, re, statistics, subprocess, textwrap
+"""Summarize ollama-info generation diagnostics.
+
+v1.11 policy:
+- fail closed when all real generation rows fail;
+- never rank models or mark settings as tested when required evidence is absent;
+- separate preload/residency evidence from generation/context evidence;
+- emit root API errors prominently.
+"""
+import argparse, csv, json, re, statistics, subprocess
 from pathlib import Path
 
-p=argparse.ArgumentParser()
+p = argparse.ArgumentParser()
 p.add_argument('--run-dir', required=True)
 p.add_argument('--model', required=True)
 p.add_argument('--role', default='generate')
@@ -11,190 +19,350 @@ p.add_argument('--profile', default='ados')
 p.add_argument('--mode', default='diagnostic')
 p.add_argument('--ctx', default='4096')
 p.add_argument('--keep-alive', default='24h')
-args=p.parse_args()
-rd=Path(args.run_dir)
-rows=[]
-summary_csv=rd/'summary.csv'
+args = p.parse_args()
+rd = Path(args.run_dir)
+summary_csv = rd / 'summary.csv'
+rows = []
 if summary_csv.exists():
     with summary_csv.open(newline='', encoding='utf-8') as f:
-        rows=list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
 
 def fnum(v, default=None):
     try:
-        if v in (None,'','None','N/A','NA'): return default
+        if v in (None, '', 'None', 'N/A', 'NA'):
+            return default
         return float(v)
-    except Exception: return default
+    except Exception:
+        return default
 
 def inum(v, default=0):
-    try: return int(float(v))
-    except Exception: return default
+    try:
+        return int(float(v))
+    except Exception:
+        return default
 
-ok_rows=[r for r in rows if r.get('result_state')=='PASS' and r.get('sample_status')=='OK']
-visible_rows=[r for r in ok_rows if fnum(r.get('visible_answer_tps')) is not None]
-warm_rows=[r for r in visible_rows if not r.get('test','').startswith('01_') and r.get('mode')!='empty-card']
-first=rows[0] if rows else {}
-first_ttft=fnum(first.get('ttft_any_ms'))
-first_load=fnum(first.get('load_s'))
-warm_ttfts=[fnum(r.get('ttft_answer_ms')) for r in warm_rows if fnum(r.get('ttft_answer_ms')) is not None]
-visible_tps=[fnum(r.get('visible_answer_tps')) for r in visible_rows if fnum(r.get('visible_answer_tps')) is not None]
-thinking_only=sum(1 for r in rows if r.get('thinking_only') in ('1','true','True'))
-fail_visible=sum(1 for r in rows if r.get('sample_status')=='FAIL_VISIBLE_OUTPUT')
-unsupported=sum(1 for r in rows if r.get('result_state')=='UNSUPPORTED')
-errors=sum(1 for r in rows if r.get('result_state')=='FAIL')
-skipped=sum(1 for r in rows if r.get('result_state')=='SKIPPED')
+def mean(vals):
+    vals = [v for v in vals if v is not None]
+    return statistics.mean(vals) if vals else None
 
-# GPU / VRAM from after snapshot CSV or nvidia-smi direct fallback.
-vram_used=vram_total=vram_pct=None
-nq=rd/'nvidia-smi-query-after.csv'
+def fmt(v, nd=1, suffix=''):
+    if v is None:
+        return 'N/A'
+    return f'{v:.{nd}f}{suffix}'
+
+def read_text(path):
+    try:
+        return Path(path).read_text(encoding='utf-8', errors='ignore')
+    except Exception:
+        return ''
+
+# Evidence partitions.
+non_skipped = [r for r in rows if r.get('result_state') != 'SKIPPED']
+api_error_rows = [r for r in rows if r.get('result_state') == 'FAIL' or fnum(r.get('http'), 0) >= 400]
+ok_rows = [r for r in rows if r.get('result_state') == 'PASS' and r.get('sample_status') == 'OK']
+visible_rows = [r for r in ok_rows if fnum(r.get('visible_answer_tps')) is not None and inum(r.get('response_chars')) > 0]
+warm_rows = [r for r in visible_rows if r.get('mode') == 'resident-warm']
+capability_rows = [r for r in visible_rows if r.get('category') in ('coding', 'essay', 'internet_access')]
+context_rows = [r for r in visible_rows if r.get('mode') == 'context-pressure' or r.get('category') == 'context']
+valid_generation_rows = len(visible_rows)
+valid_capability_rows = len(capability_rows)
+valid_context_rows = len(context_rows)
+unsupported = sum(1 for r in rows if r.get('result_state') == 'UNSUPPORTED')
+skipped = sum(1 for r in rows if r.get('result_state') == 'SKIPPED')
+thinking_only = sum(1 for r in rows if r.get('thinking_only') in ('1', 'true', 'True'))
+fail_visible = sum(1 for r in rows if r.get('sample_status') == 'FAIL_VISIBLE_OUTPUT')
+
+# Pull first request metrics from the first non-skipped row, even if it failed.
+first = next((r for r in rows if r.get('result_state') != 'SKIPPED'), rows[0] if rows else {})
+first_ttft = fnum(first.get('ttft_any_ms'))
+first_load = fnum(first.get('load_s'))
+if first_load == 0 and fnum(first.get('http'), 0) >= 400:
+    first_load = None
+warm_ttft = mean([fnum(r.get('ttft_answer_ms')) for r in warm_rows])
+visible_tps = mean([fnum(r.get('visible_answer_tps')) for r in visible_rows])
+
+# Root API errors from row notes and metrics sidecars.
+root_errors = []
+for r in api_error_rows:
+    note = r.get('notes') or ''
+    m = re.search(r'api_error=([^|]+)$', note)
+    if m:
+        root_errors.append(m.group(1).strip())
+for pth in sorted((rd / 'raw').glob('*.metrics.json')) if (rd / 'raw').exists() else []:
+    try:
+        obj = json.loads(pth.read_text(encoding='utf-8', errors='ignore'))
+    except Exception:
+        continue
+    api_error = str(obj.get('api_error') or '').strip()
+    if api_error:
+        root_errors.append(api_error)
+    elif obj.get('http_code', 0) and int(obj.get('http_code') or 0) >= 400:
+        body = str(obj.get('error_body') or '').strip()
+        if body:
+            try:
+                parsed = json.loads(body)
+                root_errors.append(str(parsed.get('error') or parsed.get('message') or body)[:500])
+            except Exception:
+                root_errors.append(body[:500])
+# stable unique
+seen = set(); unique_root_errors = []
+for e in root_errors:
+    e = re.sub(r'\s+', ' ', e).strip()
+    if e and e not in seen:
+        unique_root_errors.append(e); seen.add(e)
+root_error = unique_root_errors[0] if unique_root_errors else ''
+
+# GPU / VRAM from after snapshot CSV or live fallback.
+vram_used = vram_total = vram_pct = None
+nq = rd / 'nvidia-smi-query-after.csv'
 if nq.exists():
-    txt=nq.read_text(errors='ignore').strip().splitlines()
-    # Accept either headered or no-header CSV.
+    txt = nq.read_text(errors='ignore').strip().splitlines()
     if txt:
-        line=txt[-1]
-        parts=[x.strip() for x in line.split(',')]
-        nums=[]
+        parts = [x.strip() for x in txt[-1].split(',')]
+        nums = []
         for x in parts:
-            m=re.search(r'([0-9.]+)', x)
-            if m: nums.append(float(m.group(1)))
-        if len(nums)>=2:
-            # v1.10 writes memory.used,memory.total as fields 6/7 in noheader query; fallback last two plausible numbers >1000.
-            candidates=[n for n in nums if n>1000]
-            if len(candidates)>=2:
-                vram_used, vram_total=candidates[-2], candidates[-1]
+            m = re.search(r'([0-9.]+)', x)
+            if m:
+                nums.append(float(m.group(1)))
+        candidates = [n for n in nums if n > 1000]
+        if len(candidates) >= 2:
+            vram_used, vram_total = candidates[-2], candidates[-1]
 try:
     if vram_total is None:
-        out=subprocess.check_output(['nvidia-smi','--query-gpu=memory.used,memory.total','--format=csv,noheader,nounits'], text=True, stderr=subprocess.DEVNULL, timeout=2).splitlines()[0]
-        vram_used, vram_total=[float(x.strip()) for x in out.split(',')[:2]]
+        out = subprocess.check_output(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+            text=True, stderr=subprocess.DEVNULL, timeout=2).splitlines()[0]
+        vram_used, vram_total = [float(x.strip()) for x in out.split(',')[:2]]
 except Exception:
     pass
 if vram_used is not None and vram_total:
-    vram_pct=round(vram_used*100/vram_total,1)
-else:
-    vram_pct=None
+    vram_pct = round(vram_used * 100 / vram_total, 1)
 
 # Residency from ollama ps after if available.
-residency='unknown'
-ps=(rd/'ollama-ps-after.txt')
-if ps.exists():
-    ps_txt=ps.read_text(errors='ignore')
-    if '100% GPU' in ps_txt: residency='full_gpu'
-    elif re.search(r'[0-9]+%/[0-9]+% CPU/GPU|CPU/GPU', ps_txt): residency='cpu_gpu_offload'
+residency = 'unknown'
+ps_txt = read_text(rd / 'ollama-ps-after.txt')
+if '100% GPU' in ps_txt:
+    residency = 'full_gpu'
+elif re.search(r'[0-9]+%/[0-9]+% CPU/GPU|CPU/GPU', ps_txt):
+    residency = 'cpu_gpu_offload'
 
-classifications=[]
-if residency=='full_gpu': classifications.append('FULL_GPU_RESIDENT')
-if residency=='cpu_gpu_offload': classifications.append('CPU_GPU_OFFLOAD_RISK')
-if ((first_ttft and first_ttft>60000) or (first_load and first_load>60)) and warm_ttfts and statistics.mean(warm_ttfts)<1000:
-    classifications += ['GOOD_WARM_BAD_COLD','RESIDENT_ONLY_RECOMMENDED']
-if vram_pct is not None and vram_pct>97:
-    classifications += ['VRAM_CRITICAL_HEADROOM','CONTEXT_INCREASE_NOT_RECOMMENDED']
-elif vram_pct is not None and vram_pct>92:
-    classifications += ['VRAM_WARN_HEADROOM']
+classifications = []
+if residency == 'full_gpu':
+    classifications.append('FULL_GPU_RESIDENT')
+if residency == 'cpu_gpu_offload':
+    classifications.append('CPU_GPU_OFFLOAD_RISK')
+if ((first_ttft and first_ttft > 60000) or (first_load and first_load > 60)) and warm_ttft is not None and warm_ttft < 1000:
+    classifications += ['GOOD_WARM_BAD_COLD', 'RESIDENT_ONLY_RECOMMENDED']
+if vram_pct is not None and vram_pct > 97:
+    classifications += ['VRAM_CRITICAL_HEADROOM', 'CONTEXT_INCREASE_NOT_RECOMMENDED']
+elif vram_pct is not None and vram_pct > 92:
+    classifications.append('VRAM_WARN_HEADROOM')
 if thinking_only or fail_visible:
     classifications.append('THINKING_ONLY_OUTPUT_RISK')
 if unsupported:
     classifications.append('UNSUPPORTED_IN_GENERATION_TEST')
+if api_error_rows and valid_generation_rows == 0:
+    classifications += ['NO_VALID_GENERATION_ROWS', 'NO_MODEL_RANKING']
 
-if errors:
-    status='FAIL'
-elif unsupported and not visible_rows:
-    status='UNSUPPORTED'
+# Status and decision-grade gates.
+if not rows:
+    status = 'NO_ROWS'
+elif unsupported and valid_generation_rows == 0 and not api_error_rows:
+    status = 'UNSUPPORTED'
+elif api_error_rows and valid_generation_rows == 0:
+    status = 'TOOL_FAILURE'
+elif api_error_rows and valid_generation_rows > 0:
+    status = 'PARTIAL_FAIL_REVIEW'
 elif fail_visible or thinking_only:
-    status='PASS_WITH_REVIEW'
-elif vram_pct is not None and vram_pct>92:
-    status='PASS_WITH_WARNINGS'
+    status = 'PASS_WITH_REVIEW'
+elif vram_pct is not None and vram_pct > 92:
+    status = 'PASS_WITH_WARNINGS'
 elif skipped:
-    status='PASS_WITH_SKIPS'
+    status = 'PASS_WITH_SKIPS'
 else:
-    status='PASS' if rows else 'NO_ROWS'
+    status = 'PASS'
 
-# Recommended settings.
-ctx_rec=int(float(args.ctx)) if str(args.ctx).isdigit() else 4096
-max_loaded='1'
-num_parallel='1'
-keep_alive=args.keep_alive
-flash='1'
-kv='q8_0'
-rationale=[]
+decision_grade = status.startswith('PASS') and valid_capability_rows >= 1 and valid_generation_rows >= 1
+context_validated = valid_context_rows > 0
+ranking_allowed = decision_grade and valid_generation_rows > 0
+settings_confidence = 'HIGH_CONFIRMED' if (decision_grade and context_validated and not api_error_rows) else ('MEDIUM_PARTIAL' if decision_grade else 'LOW_UNCONFIRMED')
+
+# Settings policy: do not call a setting tested/safe unless supporting rows passed.
+def int_ctx(x):
+    try:
+        return int(float(x))
+    except Exception:
+        return 4096
+baseline_ctx = int_ctx(args.ctx)
+if context_rows:
+    ctx_rec = max(int_ctx(r.get('ctx')) for r in context_rows)
+else:
+    ctx_rec = baseline_ctx
+if 'VRAM_CRITICAL_HEADROOM' in classifications or residency == 'cpu_gpu_offload':
+    ctx_rec = min(ctx_rec, baseline_ctx, 4096)
+max_loaded = '1'
+num_parallel = '1'
+keep_alive = args.keep_alive
+flash = '1'
+# Only mark q8_0 as active when the environment or runner facts actually expose it.
+env_text = read_text(rd / 'environment-summary.md') + '\n' + read_text(rd / 'runner-log-facts.md') + '\n' + read_text(rd / 'runner-facts.txt')
+kv_confirmed = bool(re.search(r'OLLAMA_KV_CACHE_TYPE[^\n]*q8_0|KvCacheType[^\n]*q8_0|kv_cache_type[^\n]*q8_0', env_text, re.I))
+kv_value = 'q8_0' if kv_confirmed else 'unconfirmed_optional_q8_0'
+rationale = []
+if not decision_grade:
+    rationale.append('No decision-grade generation evidence was produced; settings are a safe baseline, not confirmed best parameters.')
+if context_validated:
+    rationale.append(f'Context {ctx_rec} was supported by a passing context-pressure row.')
+else:
+    rationale.append(f'Context {ctx_rec} is a conservative baseline because no context-pressure row passed.')
 if 'VRAM_CRITICAL_HEADROOM' in classifications:
-    ctx_rec=min(ctx_rec,4096); rationale.append('VRAM >97%; keep context conservative and one model loaded')
-elif vram_pct is not None and vram_pct<75:
-    ctx_rec=max(ctx_rec,8192); rationale.append('VRAM headroom appears sufficient for larger context experiments')
-else:
-    rationale.append('balanced default for RTX 3090 WSL2')
+    rationale.append('VRAM exceeded 97%; keep one model loaded, one parallel request, and conservative context.')
+elif vram_pct is not None and vram_pct < 75 and context_validated:
+    rationale.append('Observed VRAM headroom was below 75% and context-pressure evidence passed.')
 if 'GOOD_WARM_BAD_COLD' in classifications:
-    keep_alive='24h'; rationale.append('warm performance is good but cold load is slow; keep model resident')
-if residency=='cpu_gpu_offload':
-    ctx_rec=min(ctx_rec,4096); rationale.append('CPU/GPU offload detected; reduce context or model size')
+    keep_alive = '24h'
+    rationale.append('Warm performance was good but cold-load latency was high; keep the model resident.')
+if residency == 'cpu_gpu_offload':
+    rationale.append('CPU/GPU offload was detected; reduce context or choose a smaller model.')
+if kv_confirmed:
+    rationale.append('OLLAMA_KV_CACHE_TYPE=q8_0 appeared in service or runner evidence.')
+else:
+    rationale.append('KV cache q8_0 was not confirmed in this run, so it is left as an optional commented setting.')
 
-settings_sh=rd/'performance-settings.sh'
-settings_md=rd/'performance-settings.md'
+# Main setting artifacts.
+settings_conf = rd / 'recommended-ollama-env.conf'
+settings_sh = rd / 'performance-settings.sh'
+settings_md = rd / 'performance-settings.md'
+conf_lines = [
+    '[Service]',
+    f'Environment="OLLAMA_KEEP_ALIVE={keep_alive}"',
+    f'Environment="OLLAMA_MAX_LOADED_MODELS={max_loaded}"',
+    f'Environment="OLLAMA_NUM_PARALLEL={num_parallel}"',
+    f'Environment="OLLAMA_FLASH_ATTENTION={flash}"',
+    f'Environment="OLLAMA_CONTEXT_LENGTH={ctx_rec}"',
+]
+if kv_confirmed:
+    conf_lines.append('Environment="OLLAMA_KV_CACHE_TYPE=q8_0"')
+else:
+    conf_lines.append('# Optional after explicit validation: Environment="OLLAMA_KV_CACHE_TYPE=q8_0"')
+settings_conf.write_text('\n'.join(conf_lines) + '\n', encoding='utf-8')
 settings_sh.write_text(f'''#!/usr/bin/env bash
-# Apply Ollama performance settings for {args.model} on this WSL2/Linux host.
-# Generated by ollama-info v1.10. Review before applying.
+# Apply Ollama settings for {args.model} on this WSL2/Linux host.
+# settings_confidence={settings_confidence}
+# Generated by ollama-info v1.11. Review performance-settings.md before applying.
 set -euo pipefail
 sudo mkdir -p /etc/systemd/system/ollama.service.d
 sudo tee /etc/systemd/system/ollama.service.d/override.conf >/dev/null <<'EOF_OVERRIDE'
-[Service]
-Environment="OLLAMA_KEEP_ALIVE={keep_alive}"
-Environment="OLLAMA_MAX_LOADED_MODELS={max_loaded}"
-Environment="OLLAMA_NUM_PARALLEL={num_parallel}"
-Environment="OLLAMA_FLASH_ATTENTION={flash}"
-Environment="OLLAMA_CONTEXT_LENGTH={ctx_rec}"
-Environment="OLLAMA_KV_CACHE_TYPE={kv}"
-EOF_OVERRIDE
+{settings_conf.read_text()}EOF_OVERRIDE
 sudo systemctl daemon-reload
 sudo systemctl restart ollama.service
 ollama ps
-''')
+''', encoding='utf-8')
 settings_sh.chmod(0o755)
 settings_md.write_text(f'''# Performance settings recommendation
 
 Model: `{args.model}`
+Status: `{status}`
+Decision-grade: `{decision_grade}`
+Settings confidence: `{settings_confidence}`
 
-Recommended WSL2/Linux Ollama service override:
+## Applyable systemd override
+
+`recommended-ollama-env.conf`:
+
+```ini
+{settings_conf.read_text()}```
+
+Apply with:
 
 ```bash
-{settings_sh.read_text()}
+./performance-settings.sh
 ```
 
-Rationale:
+## Rationale
 
-{chr(10).join('- '+x for x in rationale)}
+{chr(10).join('- ' + x for x in rationale)}
 
-Classification: `{', '.join(classifications) if classifications else 'NONE'}`
+## Safety notes
 
-Notes:
-- `OLLAMA_MAX_LOADED_MODELS=1` is preferred for a 24 GB RTX 3090 when large models are evaluated.
-- `OLLAMA_NUM_PARALLEL=1` protects KV-cache VRAM headroom for large models; raise it only after a concurrency-specific test passes.
-- `OLLAMA_CONTEXT_LENGTH={ctx_rec}` is the tested/safe recommendation from this run, not the model's theoretical metadata maximum.
-''')
+- Settings are confirmed only when generation rows and required context-pressure rows pass.
+- `OLLAMA_MAX_LOADED_MODELS=1` is the safe RTX 3090 default for large-model evaluation.
+- `OLLAMA_NUM_PARALLEL=1` protects KV-cache VRAM headroom until a concurrency-specific benchmark passes.
+- `OLLAMA_CONTEXT_LENGTH={ctx_rec}` is marked confirmed only when `context_validated=true` in `model-scorecard.csv`.
+''', encoding='utf-8')
 
 # scorecard
-score=(rd/'model-scorecard.csv')
+score = rd / 'model-scorecard.csv'
+score_cols = [
+    'model','role','status','decision_grade','mode','residency','classifications',
+    'valid_generation_rows','valid_capability_rows','valid_context_rows','api_error_rows','root_error',
+    'first_ttft_ms','first_load_s','warm_ttft_ms_avg','visible_tps_avg','vram_pct',
+    'recommended_context','context_validated','settings_confidence','keep_alive','max_loaded_models',
+    'num_parallel','flash_attention','kv_cache_type','ranking_allowed'
+]
 with score.open('w', newline='', encoding='utf-8') as f:
-    w=csv.writer(f)
-    w.writerow(['model','role','status','mode','residency','classifications','first_ttft_ms','first_load_s','warm_ttft_ms_avg','visible_tps_avg','vram_pct','recommended_context','keep_alive','max_loaded_models','num_parallel','flash_attention','kv_cache_type'])
-    w.writerow([args.model,args.role,status,args.mode,residency,';'.join(classifications),
-                '' if first_ttft is None else round(first_ttft,1),
-                '' if first_load is None else round(first_load,2),
-                '' if not warm_ttfts else round(statistics.mean(warm_ttfts),1),
-                '' if not visible_tps else round(statistics.mean(visible_tps),2),
-                '' if vram_pct is None else vram_pct,ctx_rec,keep_alive,max_loaded,num_parallel,flash,kv])
+    w = csv.DictWriter(f, fieldnames=score_cols)
+    w.writeheader()
+    w.writerow({
+        'model': args.model, 'role': args.role, 'status': status, 'decision_grade': int(decision_grade),
+        'mode': args.mode, 'residency': residency, 'classifications': ';'.join(classifications),
+        'valid_generation_rows': valid_generation_rows, 'valid_capability_rows': valid_capability_rows,
+        'valid_context_rows': valid_context_rows, 'api_error_rows': len(api_error_rows), 'root_error': root_error,
+        'first_ttft_ms': '' if first_ttft is None else round(first_ttft, 1),
+        'first_load_s': '' if first_load is None else round(first_load, 2),
+        'warm_ttft_ms_avg': '' if warm_ttft is None else round(warm_ttft, 1),
+        'visible_tps_avg': '' if visible_tps is None else round(visible_tps, 2),
+        'vram_pct': '' if vram_pct is None else vram_pct,
+        'recommended_context': ctx_rec, 'context_validated': int(context_validated),
+        'settings_confidence': settings_confidence, 'keep_alive': keep_alive,
+        'max_loaded_models': max_loaded, 'num_parallel': num_parallel,
+        'flash_attention': flash, 'kv_cache_type': kv_value, 'ranking_allowed': int(ranking_allowed)
+    })
 
-# recommendations
-reco=rd/'recommendations.md'
-def use_line(use):
-    if args.role=='embedding': return 'Use only through `ollama embed-test` or `ollama bench`; not a generation model.'
-    if 'CPU_GPU_OFFLOAD_RISK' in classifications: return 'Not recommended as default until offload is eliminated.'
-    if use in ('OpenCode','Cursor'):
-        if visible_tps and statistics.mean(visible_tps)>70 and fail_visible==0: return 'Recommended for fast coding loops if coding validator passes.'
-        if 'RESIDENT_ONLY_RECOMMENDED' in classifications: return 'Use for heavier code reasoning only when preloaded/resident.'
-        return 'Usable, but prefer a faster coder model for tight loops.'
-    if use in ('Hermes','ADOS'):
-        if 'RESIDENT_ONLY_RECOMMENDED' in classifications: return 'Recommended as heavy resident model; preload before work.'
-        return 'Recommended if warm TTFT and VRAM headroom are acceptable.'
-    return ''
-reco.write_text(f'''# Model recommendations
+# Recommendations fail closed.
+reco = rd / 'recommendations.md'
+if not ranking_allowed:
+    reco_text = f'''# Model recommendations
+
+Model: `{args.model}`
+
+## Verdict
+
+No best-model recommendation is emitted for this run.
+
+Reason: `{status}` with `{valid_generation_rows}` valid generation rows, `{valid_capability_rows}` valid capability rows, and `{valid_context_rows}` valid context rows.
+
+Root error: `{root_error or 'none captured'}`
+
+## Use-case table
+
+| Use case | Recommendation |
+|---|---|
+| OpenCode | No recommendation from this run. |
+| Cursor | No recommendation from this run. |
+| Hermes | No recommendation from this run. |
+| ADOS | No recommendation from this run. |
+
+Repair the failing rows and rerun before selecting a winner or applying performance-tuned settings.
+'''
+else:
+    def use_line(use):
+        if args.role == 'embedding':
+            return 'Use only through `ollama embed-test` or `ollama bench`; not a generation model.'
+        if 'CPU_GPU_OFFLOAD_RISK' in classifications:
+            return 'Not recommended as default until offload is eliminated.'
+        if use in ('OpenCode', 'Cursor'):
+            if visible_tps and visible_tps > 70 and fail_visible == 0:
+                return 'Recommended for fast coding loops when coding validator rows pass.'
+            if 'RESIDENT_ONLY_RECOMMENDED' in classifications:
+                return 'Use for heavier code reasoning only when preloaded/resident.'
+            return 'Usable, but compare against a faster coder model for tight loops.'
+        if use in ('Hermes', 'ADOS'):
+            if 'RESIDENT_ONLY_RECOMMENDED' in classifications:
+                return 'Recommended as a heavy resident model; preload before work.'
+            return 'Recommended if warm TTFT and VRAM headroom match your workload.'
+        return ''
+    reco_text = f'''# Model recommendations
 
 Model: `{args.model}`
 
@@ -208,24 +376,26 @@ Model: `{args.model}`
 Main classification: `{', '.join(classifications) if classifications else 'NONE'}`
 
 Primary setting artifact: `performance-settings.sh`.
-''')
+'''
+reco.write_text(reco_text, encoding='utf-8')
 
-# summary md and terminal
-warm_ttft_s = 'N/A' if not warm_ttfts else f"{statistics.mean(warm_ttfts):.0f} ms"
-vis_s = 'N/A' if not visible_tps else f"{statistics.mean(visible_tps):.2f} tok/s"
-first_s = 'N/A' if first_ttft is None else f"{first_ttft:.0f} ms"
-load_s = 'N/A' if first_load is None else f"{first_load:.2f}s"
-vram_s = 'N/A' if vram_pct is None else f"{vram_pct:.1f}%"
+# Human summary.
+warm_ttft_s = 'N/A' if warm_ttft is None else f'{warm_ttft:.0f} ms'
+vis_s = 'N/A' if visible_tps is None else f'{visible_tps:.2f} tok/s'
+first_s = 'N/A' if first_ttft is None else f'{first_ttft:.0f} ms'
+load_s = 'N/A' if first_load is None else f'{first_load:.2f}s'
+vram_s = 'N/A' if vram_pct is None else f'{vram_pct:.1f}%'
 summary = f'''# RTX 3090 Ollama Test Summary
 
 ## Run metadata
-- script_version: 1.10
+- script_version: 1.11
 - model: {args.model}
 - role: {args.role}
 - mode: {args.mode}
 - profile: {args.profile}
 - base_url: {args.base_url}
 - status: {status}
+- decision_grade: {decision_grade}
 
 ## Decision-grade result
 - FirstTTFT: {first_s}
@@ -234,11 +404,18 @@ summary = f'''# RTX 3090 Ollama Test Summary
 - Visible answer speed: {vis_s}
 - VRAM used: {vram_s}
 - Residency: {residency}
+- Valid generation rows: {valid_generation_rows}
+- Valid capability rows: {valid_capability_rows}
+- Valid context rows: {valid_context_rows}
+- API error rows: {len(api_error_rows)}
+- Root error: {root_error or 'none captured'}
 - Classifications: {', '.join(classifications) if classifications else 'NONE'}
 
-## Performance-tuned setting output
-- Applyable config: `performance-settings.sh`
+## Performance setting output
+- Applyable config script: `performance-settings.sh`
+- Systemd override file: `recommended-ollama-env.conf`
 - Human explanation: `performance-settings.md`
+- Settings confidence: `{settings_confidence}`
 - Scorecard: `model-scorecard.csv`
 - Recommendations: `recommendations.md`
 - Environment facts: `environment-summary.md`
@@ -246,28 +423,32 @@ summary = f'''# RTX 3090 Ollama Test Summary
 
 ## Test results
 
-| Test | Mode | Category | State | Sample | Ctx | Predict | Eval tok | Visible tok/s | TTFT answer ms | Response chars | Thinking chars |
-|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Test | Mode | Category | State | Sample | Ctx | Predict | Eval tok | Visible tok/s | TTFT answer ms | Response chars | Thinking chars | Notes |
+|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 '''
 for r in rows:
-    summary += f"| {r.get('test','')} | {r.get('mode','')} | {r.get('category','')} | {r.get('result_state','')} | {r.get('sample_status','')} | {r.get('ctx','')} | {r.get('predict','')} | {r.get('eval_tokens','')} | {r.get('visible_answer_tps','')} | {r.get('ttft_answer_ms','')} | {r.get('response_chars','')} | {r.get('thinking_chars','')} |\n"
-(rd/'summary.md').write_text(summary)
-term=f'''============================================================
+    notes = (r.get('notes') or '').replace('|', '/')[:240]
+    summary += f"| {r.get('test','')} | {r.get('mode','')} | {r.get('category','')} | {r.get('result_state','')} | {r.get('sample_status','')} | {r.get('ctx','')} | {r.get('predict','')} | {r.get('eval_tokens','')} | {r.get('visible_answer_tps','')} | {r.get('ttft_answer_ms','')} | {r.get('response_chars','')} | {r.get('thinking_chars','')} | {notes} |\n"
+(rd / 'summary.md').write_text(summary, encoding='utf-8')
+term = f'''============================================================
 RTX3090 OLLAMA TEST SUMMARY
 Model   : {args.model}
 Role    : {args.role}
 Mode    : {args.mode}
 Status  : {status}
+Decision: {'YES' if decision_grade else 'NO'}
 FirstTTFT: {first_s}
 FirstReqLoad: {load_s}
 WarmTTFT: {warm_ttft_s}
 Visible : {vis_s}
 Residency: {residency}
 VRAM    : {vram_s}
+ValidRows: generation={valid_generation_rows} capability={valid_capability_rows} context={valid_context_rows}
+RootErr : {root_error or 'none captured'}
 Class   : {', '.join(classifications) if classifications else 'NONE'}
-Settings: {settings_sh}
+Settings: {settings_sh} confidence={settings_confidence}
 Scorecard: {score}
 ============================================================
 '''
-(rd/'terminal-summary.txt').write_text(term)
+(rd / 'terminal-summary.txt').write_text(term, encoding='utf-8')
 print(term)

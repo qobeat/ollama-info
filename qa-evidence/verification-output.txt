@@ -1,0 +1,20 @@
+PASS bash syntax checks
+PASS python syntax checks
+PASS think false serialized as JSON boolean
+PASS success harness decision-grade PASS
+PASS recommended-ollama-env.conf emitted
+PASS failure harness exits nonzero
+PASS TOOL_FAILURE summary
+PASS NO_MODEL_RANKING scorecard
+PASS recommendations suppressed on failure
+PASS root error surfaced
+PASS aggregate success harness
+PASS aggregate recommendation from decision-grade rows
+PASS aggregate scorecard emitted
+PASS JSON surfaces parse
+PASS schema and evidence JSON/JSONL parse
+PASS package hygiene precheck
+PASS PACKAGE-MANIFEST generated
+PASS extracted ZIP hygiene validation
+PASS delivery ZIP entries validation
+PASS quality evidence ZIP entries validation

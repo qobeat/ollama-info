@@ -1,0 +1,12 @@
+Goal: repair v1.10 so ollama-info produces decision-grade model-selection and settings evidence.
+
+Objectives:
+1. Use v1.10 package as baseline.
+2. Fix typed JSON serialization for Ollama think parameter.
+3. Capture API root errors in metrics and terminal summaries.
+4. Fail closed when no generation rows are valid.
+5. Suppress single-model and aggregate best-model recommendations unless evidence is decision-grade.
+6. Mark settings confidence and avoid unconfirmed context/KV claims.
+7. Rewrite README with GOAL, objectives, command semantics, modes, config interpretation, troubleshooting, and evidence model.
+8. Add requirements.md and update MANIFEST/SOURCE-OF-TRUTH for ADOS-style authority separation.
+9. Verify via syntax checks, fake success harness, fake failure harness, aggregate ranking harness, schema/JSONL checks, and package hygiene.
