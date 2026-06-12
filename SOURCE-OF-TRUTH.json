@@ -1,0 +1,9 @@
+{
+  "governed_concepts": [
+    {"concept": "command_behavior", "owner": "README.md", "reference_policy": "scripts implement the documented command contract"},
+    {"concept": "runtime_scripts", "owner": "scripts/", "reference_policy": "README and changelog describe behavior without duplicating implementation"},
+    {"concept": "release_plan", "owner": "changelog/plan-1.10.txt", "reference_policy": "QA evidence references this plan"},
+    {"concept": "observed_verification_facts", "owner": "qa-evidence/evidence-ledger.jsonl", "reference_policy": "summaries cite evidence rows"},
+    {"concept": "package_identity", "owner": "PACKAGE.json", "reference_policy": "manifest and QA metadata mirror package identity"}
+  ]
+}

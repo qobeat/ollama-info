@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ollama-info QA evidence row",
+  "type": "object",
+  "required": ["id", "type", "status", "summary"],
+  "properties": {
+    "id": {"type": "string"},
+    "type": {"type": "string"},
+    "status": {"type": "string"},
+    "summary": {"type": "string"},
+    "refs": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

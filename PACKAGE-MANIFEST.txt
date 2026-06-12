@@ -1,35 +1,36 @@
-ollama-info v1.9 package manifest
-
-Package contents are source scripts, Bash integration, changelog, and current QA evidence. Runtime benchmark archives, run directories, caches, nested zips, and scratch files are excluded from the source package boundary.
-
-Files:
-- PACKAGE-MANIFEST.txt
-- README.md
-- bashrc/.bashrc
-- bashrc/README.md
-- changelog/CHANGELOG.md
-- changelog/REFLECTION-v1.9.md
-- changelog/REVIEW-v1.9.md
-- changelog/VERIFY-v1.9.md
-- changelog/atomic-requirements-v1.9.txt
-- changelog/plan-1.9.txt
-- qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
-- qa-evidence/ados-apply-verify-schema.json
-- qa-evidence/evidence-ledger.jsonl
-- qa-evidence/self-evaluation.md
-- qa-evidence/test-results-review.md
-- qa-evidence/verification-output.txt
-- scripts/ollama-bench-RTX3090.sh
-- scripts/ollama-common.sh
-- scripts/ollama-download.sh
-- scripts/ollama-embed-test-RTX3090.sh
-- scripts/ollama-gen
-- scripts/ollama-monitor.sh
-- scripts/ollama-perf
-- scripts/ollama-perf-table
-- scripts/ollama-start
-- scripts/ollama-status
-- scripts/ollama-stop
-- scripts/ollama-test-RTX3090.sh
-- scripts/ollama-test-and-monitor-RTX3090.sh
-- scripts/ollama.sh
+MANIFEST.md
+PACKAGE-MANIFEST.txt
+PACKAGE.json
+README.md
+SOURCE-OF-TRUTH.json
+bashrc/.bashrc
+bashrc/README.md
+changelog/CHANGELOG.md
+changelog/REFLECTION-v1.10.md
+changelog/REVIEW-v1.10.md
+changelog/VERIFY-v1.10.md
+changelog/atomic-requirements-v1.10.txt
+qa-evidence/QUALITY-EVIDENCE-SUMMARY-v1.10.md
+qa-evidence/ados-compliance-v1.10.md
+qa-evidence/evidence-ledger.jsonl
+qa-evidence/request-record-v1.10.md
+qa-evidence/self-evaluation-v1.10.md
+qa-evidence/test-results-reference-review-v1.10.md
+qa-evidence/verification-output-v1.10.txt
+schema.json
+scripts/ollama-bench-RTX3090.sh
+scripts/ollama-common.sh
+scripts/ollama-download.sh
+scripts/ollama-embed-test-RTX3090.sh
+scripts/ollama-gen
+scripts/ollama-monitor.sh
+scripts/ollama-perf
+scripts/ollama-perf-table
+scripts/ollama-run-generate.py
+scripts/ollama-start
+scripts/ollama-status
+scripts/ollama-stop
+scripts/ollama-summarize-results.py
+scripts/ollama-test-RTX3090.sh
+scripts/ollama-test-and-monitor-RTX3090.sh
+scripts/ollama.sh

@@ -7,8 +7,8 @@ COMMON_SCRIPT="$SCRIPT_DIR/ollama-common.sh"
 # shellcheck source=/dev/null
 source "$COMMON_SCRIPT"
 
-VERSION="1.7.1"
-SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.7.1-offload-residency-warnings"
+VERSION="1.5.0"
+SCRIPT_SIGNATURE="OLLAMA_MONITOR_SCRIPT_SIGNATURE=v1.5.0-atomic-review-plain-summary"
 
 INTERVAL="${INTERVAL:-3}"
 DURATION="${DURATION:-0}"
@@ -22,11 +22,10 @@ SNAPSHOT_EVERY_PROVIDED="${SNAPSHOT_EVERY_PROVIDED:-0}"
 ZIP_ON_EXIT="${ZIP_ON_EXIT:-1}"
 
 TEMP_WARN="${TEMP_WARN:-83}"
-TEMP_CRIT="${TEMP_CRIT:-90}"
+TEMP_CRIT="${TEMP_CRIT:-88}"
 TEMP_SPIKE="${TEMP_SPIKE:-8}"
 POWER_SPIKE="${POWER_SPIKE:-80}"
-VRAM_WARN_PCT="${VRAM_WARN_PCT:-92}"
-VRAM_CRIT_PCT="${VRAM_CRIT_PCT:-97}"
+VRAM_WARN_PCT="${VRAM_WARN_PCT:-90}"
 GPU_UTIL_BUSY_PCT="${GPU_UTIL_BUSY_PCT:-85}"
 LOW_GPU_UTIL_PCT="${LOW_GPU_UTIL_PCT:-20}"
 HIGH_POWER_LOW_UTIL_W="${HIGH_POWER_LOW_UTIL_W:-150}"
@@ -76,7 +75,7 @@ Options:
 
 Useful env thresholds:
   TEMP_WARN=$TEMP_WARN TEMP_CRIT=$TEMP_CRIT TEMP_SPIKE=$TEMP_SPIKE POWER_SPIKE=$POWER_SPIKE
-  VRAM_WARN_PCT=$VRAM_WARN_PCT VRAM_CRIT_PCT=$VRAM_CRIT_PCT GPU_UTIL_BUSY_PCT=$GPU_UTIL_BUSY_PCT BUSY_LOW_CLOCK_MHZ=$BUSY_LOW_CLOCK_MHZ
+  VRAM_WARN_PCT=$VRAM_WARN_PCT GPU_UTIL_BUSY_PCT=$GPU_UTIL_BUSY_PCT BUSY_LOW_CLOCK_MHZ=$BUSY_LOW_CLOCK_MHZ
 
 Outputs per run:
   $RUN_DIR/
@@ -111,8 +110,6 @@ done
 is_uint "$INTERVAL" || { echo "ERROR: --interval must be an integer" >&2; exit 2; }
 is_uint "$DURATION" || { echo "ERROR: --duration must be an integer" >&2; exit 2; }
 is_uint "$SNAPSHOT_EVERY" || { echo "ERROR: --snapshot-every must be an integer" >&2; exit 2; }
-is_uint "$VRAM_WARN_PCT" || { echo "ERROR: VRAM_WARN_PCT must be an integer" >&2; exit 2; }
-is_uint "$VRAM_CRIT_PCT" || { echo "ERROR: VRAM_CRIT_PCT must be an integer" >&2; exit 2; }
 [[ "$INTERVAL" -ge 1 ]] || { echo "ERROR: --interval must be >= 1" >&2; exit 2; }
 [[ "$SNAPSHOT_EVERY" -ge 1 ]] || SNAPSHOT_EVERY=1
 
@@ -188,7 +185,6 @@ write_meta() {
     echo "temp_spike_c=$TEMP_SPIKE"
     echo "power_spike_w=$POWER_SPIKE"
     echo "vram_warn_pct=$VRAM_WARN_PCT"
-    echo "vram_crit_pct=$VRAM_CRIT_PCT"
     echo "gpu_util_busy_pct=$GPU_UTIL_BUSY_PCT"
     echo "high_power_low_util_w=$HIGH_POWER_LOW_UTIL_W"
     echo "low_gpu_util_pct=$LOW_GPU_UTIL_PCT"
@@ -367,19 +363,18 @@ generate_report() {
     echo "- temp_spike_c: $TEMP_SPIKE"
     echo "- power_spike_w: $POWER_SPIKE"
     echo "- vram_warn_pct: $VRAM_WARN_PCT"
-    echo "- vram_crit_pct: $VRAM_CRIT_PCT"
     echo
 
     echo "## Diagnostic verdicts"
     awk -F',' \
-      -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v vram_crit="$VRAM_CRIT_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
+      -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
       function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
       function raw(name, pos){pos=idx[name]; if(pos=="" || pos<1 || pos>NF) return ""; return trim($pos)}
       function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
       function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
       NR==1{for(i=1;i<=NF;i++)idx[trim($i)]=i; next}
-      {n++; gpu=num("gpu_util_pct"); temp=num("temp_c"); memtemp=raw("mem_temp_c"); vram=num("vram_used_mib"); total=num("vram_total_mib"); power=num("power_w"); pcie=num("pcie_width_current"); pmax=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(total>0 && vram>0){last_total=total; if(vram>max_vram)max_vram=vram}; if(memtemp=="" || memtemp=="N/A") memtemp_missing++; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0 && 100*vram/total>=vram_warn)vh++; if(total>0 && 100*vram/total>=vram_crit)vc++; if(active(hw)) hwc++; if(active(sw)) swc++; if(gpu>=busy_pct && pcie>0 && pmax>0 && pcie<pmax) pcie_warn++; if(gpu>=busy_pct && gfx>0 && gfx<busy_low_clock) lowclk++}
-      END{powersev=(n>0&&100*swc/n>10?"WARN":"INFO"); status="PASS"; if(tc>0||hwc>0)status="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)status="PASS_WITH_WARNINGS"; printf "- health_verdict: %s\n", status; printf "- temperature: core_max=%.0fC warn_samples=%d critical_samples=%d memory_temp_unknown=%d/%d\n", max_temp, tw, tc, memtemp_missing, n; printf "- power_limit: max_power=%.1fW sw_power_cap_samples=%d/%d severity=%s hw_slowdown_samples=%d\n", max_power, swc, n, powersev, hwc; printf "- vram: max=%.0f MiB total=%.0f MiB warn_samples=%d critical_samples=%d\n", max_vram, last_total, vh, vc; printf "- pcie: busy_width_below_max_samples=%d\n", pcie_warn; printf "- low_clock_observation_samples=%d\n", lowclk; if(memtemp_missing>0) print "- note: memory junction temperature unavailable means unknown, not pass/fail."}' "$CSV"
+      {n++; gpu=num("gpu_util_pct"); temp=num("temp_c"); memtemp=raw("mem_temp_c"); vram=num("vram_used_mib"); total=num("vram_total_mib"); power=num("power_w"); pcie=num("pcie_width_current"); pmax=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(total>0 && vram>0){last_total=total; if(vram>max_vram)max_vram=vram}; if(memtemp=="" || memtemp=="N/A") memtemp_missing++; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0 && 100*vram/total>=vram_warn)vh++; if(active(hw)) hwc++; if(active(sw)) swc++; if(gpu>=busy_pct && pcie>0 && pmax>0 && pcie<pmax) pcie_warn++; if(gpu>=busy_pct && gfx>0 && gfx<busy_low_clock) lowclk++}
+      END{status="PASS"; if(tc>0||hwc>0)status="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)status="PASS_WITH_CHECKS"; printf "- health_verdict: %s\n", status; printf "- temperature: max=%.0fC warn_samples=%d critical_samples=%d\n", max_temp, tw, tc; printf "- power: max=%.1fW sw_power_cap_samples=%d hw_slowdown_samples=%d\n", max_power, swc, hwc; printf "- vram: max=%.0f MiB total=%.0f MiB high_samples=%d\n", max_vram, last_total, vh; printf "- pcie: busy_width_below_max_samples=%d\n", pcie_warn; printf "- low_clock_observation_samples=%d\n", lowclk; printf "- memory_temperature_unavailable_samples=%d/%d\n", memtemp_missing, n; if(memtemp_missing>0) print "- note: RTX 3090 GDDR6X memory junction temperature may be unavailable in WSL2 nvidia-smi output."}' "$CSV"
     echo
     echo "## Inference exercise coverage"
     echo "- verdict: $exercise_verdict"
@@ -390,37 +385,6 @@ generate_report() {
       echo "- note: no Ollama-loaded model snapshot was observed; thermal/power/PCIe health may describe idle or failed-load telemetry, not completed inference stability."
     fi
     echo
-    echo "## Ollama residency/offload classification"
-    if [[ -s "$OLLAMA_PS_FILE" ]]; then
-      awk '
-        /^--- /{ts=$0; next}
-        /^[[:space:]]*$/ || /^NAME[[:space:]]/ || /ollama CLI not found/ || /Error:/ {next}
-        {
-          name=$1; proc=""
-          for(i=5;i<=NF;i++){
-            if($i ~ /^[0-9]+$/) break
-            proc=(proc==""?$i:proc" "$i)
-          }
-          if(proc=="") next
-          total++
-          if(proc=="100% GPU") fullgpu++
-          else if(proc ~ /CPU\/GPU/ || proc ~ /CPU/) {offload++; if(offload_lines<20){offload_lines++; offline[offload_lines]=ts " " name " processor=" proc}}
-          else {nonfull++; if(nonfull_lines<20){nonfull_lines++; nonline[nonfull_lines]=ts " " name " processor=" proc}}
-        }
-        END{
-          printf "- loaded_model_snapshot_rows: %d\n", total+0
-          printf "- full_gpu_rows: %d\n", fullgpu+0
-          printf "- cpu_or_mixed_offload_rows: %d\n", offload+0
-          printf "- non_full_gpu_unknown_rows: %d\n", nonfull+0
-          if(offload>0){print "- warning: CPU/GPU mixed residency observed; generation numbers are not a clean full-GPU-resident benchmark for those snapshots."; print "- offload_examples:"; for(i=1;i<=offload_lines;i++) print "  - " offline[i]}
-          else if(nonfull>0){print "- warning: non-100%-GPU processor states observed; inspect ollama ps snapshots."}
-          else if(total>0){print "- warning: none; all parsed loaded-model snapshots were 100% GPU."}
-          else {print "- warning: no parseable loaded-model rows."}
-        }' "$OLLAMA_PS_FILE" 2>/dev/null || echo "- warning: could not parse ollama ps snapshots"
-    else
-      echo "- warning: no ollama ps snapshot file"
-    fi
-    echo
 
     awk -F',' \
       -v sample_interval="$INTERVAL" \
@@ -429,7 +393,6 @@ generate_report() {
       -v temp_spike="$TEMP_SPIKE" \
       -v power_spike="$POWER_SPIKE" \
       -v vram_warn="$VRAM_WARN_PCT" \
-      -v vram_crit="$VRAM_CRIT_PCT" \
       -v busy_pct="$GPU_UTIL_BUSY_PCT" \
       -v low_gpu_util="$LOW_GPU_UTIL_PCT" \
       -v high_power_low_util="$HIGH_POWER_LOW_UTIL_W" \
@@ -598,14 +561,14 @@ make_terminal_summary() {
     echo "Run ID  : $RUN_ID"
     echo "Reason  : $STOP_REASON"
     if [[ -s "$CSV" ]]; then
-      awk -F',' -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v vram_crit="$VRAM_CRIT_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
+      awk -F',' -v temp_warn="$TEMP_WARN" -v temp_crit="$TEMP_CRIT" -v vram_warn="$VRAM_WARN_PCT" -v busy_pct="$GPU_UTIL_BUSY_PCT" -v busy_low_clock="$BUSY_LOW_CLOCK_MHZ" '
         function trim(s){gsub(/^[ \t]+|[ \t]+$/, "", s); return s}
         function raw(name, pos){pos=h[name]; if(pos=="" || pos<1 || pos>NF) return ""; return trim($pos)}
         function num(name, s){s=raw(name); if(s=="" || s=="N/A" || s ~ /Not Supported|Unavailable|deprecated/) return ""; gsub(/ MiB| W| %| C| MHz/, "", s); return s+0}
         function active(v){return (v!="" && v!="N/A" && v !~ /Not Active|0x0000000000000000/)}
         NR==1{for(i=1;i<=NF;i++) h[trim($i)]=i; next}
-        {n++; name=raw("name"); util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(total>0&&100*vram/total>=vram_crit)vc++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
-        END{pct=(last_total?100*max_vram/last_total:0); powersev=(n>0&&100*swc/n>10?"WARN":"INFO"); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_WARNINGS"; printf "Health  : %s\n", verdict; printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : core max %.0fC; warn=%d critical=%d; memtemp_NA=%d/%d\n", max_temp, tw, tc, memmiss, n; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); warn=%d critical=%d\n", max_vram, last_total, pct, vh, vc; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Power   : max %.1fW; sw_power_cap=%d/%d severity=%s; hw_slowdown=%d\n", max_power, swc, n, powersev, hwc; printf "Clocks  : lowclk_obs=%d\n", lowclk}' "$CSV"
+        {n++; name=raw("name"); util=num("gpu_util_pct"); temp=num("temp_c"); power=num("power_w"); vram=num("vram_used_mib"); total=num("vram_total_mib"); pg=raw("pcie_gen_current"); pw=num("pcie_width_current"); pmw=num("pcie_width_max"); gfx=num("graphics_clock_mhz"); memtemp=raw("mem_temp_c"); hw=raw("throttle_hw_slowdown"); sw=raw("throttle_sw_power_cap"); sum_util+=util; if(util>max_util)max_util=util; if(temp>max_temp)max_temp=temp; if(power>max_power)max_power=power; if(vram>max_vram)max_vram=vram; if(total>0)last_total=total; last_pg=pg; last_pw=pw; last_pmw=pmw; if(temp>=temp_warn)tw++; if(temp>=temp_crit)tc++; if(total>0&&100*vram/total>=vram_warn)vh++; if(util>=busy_pct&&pw>0&&pmw>0&&pw<pmw)pcie_warn++; if(util>=busy_pct&&gfx>0&&gfx<busy_low_clock)lowclk++; if(active(hw))hwc++; if(active(sw))swc++; if(memtemp==""||memtemp=="N/A") memmiss++}
+        END{pct=(last_total?100*max_vram/last_total:0); verdict="PASS"; if(tc>0||hwc>0)verdict="FAIL"; else if(tw>0||vh>0||swc>0||pcie_warn>0)verdict="PASS_WITH_CHECKS"; printf "Health  : %s\n", verdict; printf "GPU     : %s; samples %d; avg-util %.1f%%; max-util %.0f%%\n", name, n, (n?sum_util/n:0), max_util; printf "Thermal : max-temp %.0fC; max-power %.1fW; temp-warn=%d crit=%d\n", max_temp, max_power, tw, tc; printf "VRAM    : max-used %.0f MiB / %.0f MiB (%.1f%%); high=%d\n", max_vram, last_total, pct, vh; printf "PCIe    : gen %s; width x%s / max x%s; busy-width-checks=%d\n", last_pg, last_pw, last_pmw, pcie_warn; printf "Throttle: hw_slowdown=%d sw_power_cap=%d; lowclk_obs=%d; memtemp_NA=%d/%d\n", hwc, swc, lowclk, memmiss, n}' "$CSV"
     else
       echo "GPU     : no CSV samples"
     fi

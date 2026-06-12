@@ -1,0 +1,20 @@
+AR-110-001: The package must provide a canonical ollama.sh wrapper for user commands.
+AR-110-002: The default generation diagnostic must run empty-card, resident-warm, and safe context-pressure lanes.
+AR-110-003: ADOS capability prompts must include coding, essay, and internet-access boundary probes.
+AR-110-004: Coding probes must record deterministic visible-output checks and static code markers.
+AR-110-005: Internet probes must recognize valid no-live-internet boundary language.
+AR-110-006: Thinking-only rows must not count as visible answer throughput.
+AR-110-007: Generation diagnostics must write model-scorecard.csv.
+AR-110-008: Generation diagnostics must write recommendations.md.
+AR-110-009: Generation diagnostics must write applyable performance-settings.sh.
+AR-110-010: Generation diagnostics must write performance-settings.md with rationale.
+AR-110-011: Environment settings must be logged in environment-summary.md.
+AR-110-012: Runner/server facts must be parsed into runner-log-facts.md.
+AR-110-013: Context increases must be skipped when VRAM is critical unless forced.
+AR-110-014: Multi-model generation runs must produce one aggregate ZIP.
+AR-110-015: Single-model result ZIP names must include the sanitized model name.
+AR-110-016: Role-aware bench must route embedding models to /api/embed.
+AR-110-017: Embedding benchmark must report vector count and vector dimension.
+AR-110-018: Package must exclude runtime run directories, nested archives, caches, and generated debris.
+AR-110-019: Package must include ADOS plan, review, verification, reflection, and evidence ledger surfaces.
+AR-110-020: Verification must include syntax checks, fake-harness behavior checks, package hygiene, and evidence-ledger validation.

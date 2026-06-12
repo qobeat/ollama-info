@@ -1,434 +1,213 @@
 # ollama-info
 
-`ollama-info` provides a local RTX 3090 + Ollama command layer for model health checks, capability probes, monitored benchmarks, embedding tests, and compact evidence archives. It is designed for WSL2/Linux workstations where Ollama runs as a local service and an NVIDIA RTX 3090 is the primary inference device.
+`ollama-info` is a local Ollama and RTX 3090 diagnostic toolkit for choosing usable local models and producing applyable performance settings for a WSL2/Linux Ollama service.
 
-The package installs a small Bash wrapper, `scripts/ollama.sh`, that can be exposed as `ollama` through `bashrc/.bashrc`. Known `ollama-info` commands are handled by the wrapper. Unknown subcommands pass through to the native Ollama CLI.
+The primary goal is decision support:
 
-## Installation
+1. identify the best model or models for coding, agentic runtime, ADOS-style workflows, Hermes-style workflows, and RAG/embedding work;
+2. identify the safest high-performance configuration settings for the selected model on the current hardware and service environment;
+3. produce compact evidence that explains why a model is recommended, warned, or rejected.
 
-From the package root:
-
-```bash
-chmod +x scripts/*
-```
-
-To expose the wrapper through your shell, review and install the provided Bash integration:
+## Install
 
 ```bash
-cp bashrc/.bashrc ~/.bashrc
-source ~/.bashrc
+cd ~/dev
+unzip ollama-info.zip
+export OLLAMA_INFO_HOME="$HOME/dev/ollama-info"
+source "$OLLAMA_INFO_HOME/bashrc/.bashrc"
 ```
 
-The integration adds helper aliases and functions while keeping server-side Ollama configuration in systemd or your normal Ollama service configuration.
+The canonical entrypoint is:
+
+```bash
+$OLLAMA_INFO_HOME/scripts/ollama.sh
+```
+
+You may alias it as `ollama` only if you intentionally want the wrapper to pass unknown commands through to the native Ollama CLI.
 
 ## Command overview
 
-| Command | Primary use | Output style |
-|---|---|---|
-| `ollama status` | Check Ollama API, service, GPU, and quick readiness. | Terminal dashboard. |
-| `ollama start` | Start or restart the local Ollama service. | Service command output and status. |
-| `ollama stop` | Stop the local Ollama service. | Service command output and status. |
-| `ollama models` | List local models, classify generation vs embedding, and show suggested benchmark commands. | Terminal model table. |
-| `ollama gpu` | Run `nvidia-smi` through the wrapper. | NVIDIA telemetry. |
-| `ollama logs` | Show recent Ollama systemd logs. | Journal text. |
-| `ollama test MODEL...` | Run the default generation capability profile. | Monitored run directory and ZIP archive. |
-| `ollama bench MODEL...` | Auto-route each model to the correct generation or embedding benchmark. | Monitored run directory and ZIP archive. |
-| `ollama embed-test MODEL...` | Force the embedding benchmark through `/api/embed`. | Monitored embedding run directory and ZIP archive. |
-| `ollama <native command>` | Pass unknown commands to the native Ollama CLI. | Native Ollama output. |
+### `ollama.sh status`
 
-## `ollama status`
+Shows the Ollama service state, API version, and RTX GPU snapshot.
 
-```bash
-ollama status
-ollama status --brief
-```
+Use it before tests to confirm that the API is reachable and that the GPU is visible.
 
-### What it does
+Interpretation:
 
-`ollama status` checks whether the local Ollama API responds, whether the system service is active when systemd is available, and whether the NVIDIA GPU is visible. It prints the configured API URL, Ollama API version when reachable, GPU name, temperature, memory use, and utilization.
+- `api: RUNNING` means the local Ollama HTTP API responded.
+- `gpu: NVIDIA GeForce RTX 3090 ...` means `nvidia-smi` is available to the Linux/WSL2 environment.
+- high idle VRAM before a test means another model or process may be resident.
 
-### How to interpret it
+### `ollama.sh models`
 
-A healthy local setup shows:
+Lists local models, inferred role, approximate size, and suggested commands.
+
+Interpretation:
+
+- `generate` models are valid targets for `ollama.sh test`.
+- `embedding` models should be tested with `ollama.sh embed-test` or `ollama.sh bench`.
+- Ambiguous model patterns are resolved by exact match first, then base tag, then unique substring.
+
+### `ollama.sh test MODEL`
+
+Runs the default generation diagnostic for one model. The default diagnostic includes:
+
+1. `empty-card` first-load lane: unloads resident models when possible and measures first-request load cost.
+2. `resident-warm` lane: preloads/keeps the model resident and runs ADOS capability prompts.
+3. `context-pressure` lane: checks safe context growth and skips unsafe larger context when VRAM is already critical.
+4. environment logging: Ollama version, service variables, WSL/kernel facts, GPU facts, model metadata.
+5. output generation: `summary.md`, `terminal-summary.txt`, `model-scorecard.csv`, `recommendations.md`, `performance-settings.sh`, and `performance-settings.md`.
+
+Use it when selecting a daily model or tuning a large model.
+
+Important output fields:
+
+- `FirstTTFT`: first token latency for the first request.
+- `FirstReqLoad`: Ollama load duration on the first request.
+- `WarmTTFT`: first-token latency after the model is already resident.
+- `Visible answer speed`: output speed for visible answer text; thinking-only output is not counted.
+- `VRAM used`: observed GPU memory pressure.
+- `Residency`: whether the model is fully on GPU or split CPU/GPU.
+- `Classifications`: decision labels such as `GOOD_WARM_BAD_COLD`, `VRAM_CRITICAL_HEADROOM`, or `RESIDENT_ONLY_RECOMMENDED`.
+
+### `ollama.sh test MODEL --quick`
+
+Runs a shorter capability check. Use this after a full diagnostic has already established safe settings.
+
+### `ollama.sh test MODEL --mode resident-warm`
+
+Tests daily practical behavior when the model is already loaded. Use this for OpenCode, Cursor, Hermes, and ADOS workflows that keep a model resident.
+
+### `ollama.sh test MODEL --mode context-pressure`
+
+Tests context growth under current hardware constraints. Use it before increasing `OLLAMA_CONTEXT_LENGTH`.
+
+The script skips higher context by default if current VRAM pressure is already critical. Use `--force-context-pressure` only when you intentionally accept risk of CPU/GPU offload or out-of-memory behavior.
+
+### `ollama.sh test MODEL_A MODEL_B ...`
+
+Runs multiple generation models and produces one aggregate ZIP. The aggregate output includes:
+
+- `multi-model-index.csv`
+- aggregate `model-scorecard.csv`
+- aggregate `recommendations.md`
+- per-model subdirectories containing settings and evidence
+
+Use this to compare candidates for OpenCode, Cursor, Hermes, and ADOS.
+
+### `ollama.sh bench MODEL_A MODEL_B ...`
+
+Role-aware benchmark command.
+
+- generation models route to `ollama.sh test`;
+- embedding models route to `ollama.sh embed-test`;
+- mixed model lists are split into generation and embedding result groups.
+
+Use it when a model list may contain both generation and embedding models.
+
+### `ollama.sh embed-test MODEL`
+
+Runs `/api/embed` tests for embedding/RAG models.
+
+Rows:
+
+- short sanity input;
+- 32-chunk batch input;
+- RAG-like document chunks.
+
+Interpretation:
+
+- `vector_dim` identifies embedding width.
+- `embeddings_per_s` measures embedding request throughput.
+- `embed_tokens_per_s` approximates indexing throughput.
+
+### `ollama.sh preload MODEL --ctx 4096 --keep-alive 24h`
+
+Preloads a model and keeps it resident. Use this when a model has good warm performance but bad first-load behavior.
+
+### `ollama.sh gpu`
+
+Displays the current `nvidia-smi` output.
+
+### `ollama.sh logs [N]`
+
+Shows recent Ollama systemd logs. Use this when diagnostics report slow runner startup, missing KV cache type, or offload warnings.
+
+## Main setting output
+
+Every generation diagnostic produces:
 
 ```text
-api: RUNNING
-service: active
-GPU: NVIDIA GeForce RTX 3090
+performance-settings.sh
+performance-settings.md
 ```
 
-High idle VRAM use before a benchmark means another model, desktop process, or WSL graphics component may already be occupying memory. That matters for large models because high VRAM occupancy can push a run into CPU/GPU offload or make model switching slow.
-
-### When to use it
-
-Use `ollama status` before model tests, after restarting Ollama, after a failed benchmark, and when you need a quick readiness check for Cursor, OpenCode, Hermes Agent, or ADOS local workflows.
-
-## `ollama start`
-
-```bash
-ollama start
-```
-
-### What it does
-
-`ollama start` starts the Ollama service through the available local service manager. It then reports whether the API is reachable.
-
-### How to interpret it
-
-The command is successful when the API reports `RUNNING`. If the service starts but the API is not reachable, inspect `ollama logs` and confirm that the service is bound to the expected host and port.
-
-### When to use it
-
-Use it after boot, after changing service configuration, or when `ollama status` says the API is not reachable.
-
-## `ollama stop`
-
-```bash
-ollama stop
-```
-
-### What it does
-
-`ollama stop` stops the local Ollama service through the available local service manager.
-
-### How to interpret it
-
-A successful stop means the API should no longer respond. GPU memory used by Ollama should be released after the service exits.
-
-### When to use it
-
-Use it before service-level configuration changes, before a verified restart-style load test, or when you need to clear all resident models by stopping the service.
-
-## `ollama models`
-
-```bash
-ollama models
-```
-
-### What it does
-
-`ollama models` queries the local Ollama API, lists locally available models, classifies each model role, and prints suggested commands. Generation-capable models are suggested for `ollama test` and `ollama bench`; embedding-only models are suggested for `ollama bench` or `ollama embed-test`.
-
-### How to interpret it
-
-The `ROLE` column is important:
+`performance-settings.sh` is the applyable WSL2/Linux systemd override. It sets:
 
 ```text
-generate   use /api/generate tests
-embedding  use /api/embed tests
-unknown    inspect the model before benchmarking
+OLLAMA_KEEP_ALIVE
+OLLAMA_MAX_LOADED_MODELS
+OLLAMA_NUM_PARALLEL
+OLLAMA_FLASH_ATTENTION
+OLLAMA_CONTEXT_LENGTH
+OLLAMA_KV_CACHE_TYPE
 ```
 
-`ollama test` is intentionally strict generation mode. It does not silently treat an embedding-only model as a generation model. Use `ollama bench` when you want automatic role routing.
+Apply only after reviewing `performance-settings.md` and the classification labels.
 
-### When to use it
+## Classification labels
 
-Use it when choosing model names, when a pattern is ambiguous, after pulling a new model, or before running a multi-model comparison.
-
-## `ollama gpu`
-
-```bash
-ollama gpu
-ollama gpu --query-gpu=name,memory.used,memory.total,temperature.gpu,utilization.gpu --format=csv
-```
-
-### What it does
-
-`ollama gpu` passes arguments to `nvidia-smi`. It is a convenience wrapper for direct GPU inspection.
-
-### How to interpret it
-
-Key fields:
-
-| Field | Meaning |
+| Label | Meaning |
 |---|---|
-| `memory.used` | VRAM already occupied. High values before a run can contaminate residency results. |
-| `temperature.gpu` | GPU core temperature. Core temperature is not the same as GDDR6X memory-junction temperature. |
-| `utilization.gpu` | Current GPU compute activity. |
-| power draw / power limit | Whether the card is near its configured power cap. |
-| PCIe generation and width | Link state; lower-than-maximum width mainly affects load/offload/model switching, not necessarily resident decode. |
+| `FULL_GPU_RESIDENT` | Ollama reports the tested model fully resident on GPU. |
+| `CPU_GPU_OFFLOAD_RISK` | The model is split between CPU and GPU; throughput is not a clean RTX 3090 resident result. |
+| `GOOD_WARM_BAD_COLD` | Warm latency is good but first-load latency is high. Keep the model resident. |
+| `RESIDENT_ONLY_RECOMMENDED` | Use the model after preloading; avoid frequent unload/reload workflows. |
+| `VRAM_CRITICAL_HEADROOM` | VRAM exceeds the critical threshold. Avoid raising context or parallelism. |
+| `CONTEXT_INCREASE_NOT_RECOMMENDED` | The current hardware/model state does not support larger context safely. |
+| `THINKING_ONLY_OUTPUT_RISK` | The model produced thinking text without visible answer text for a capability row. |
 
-### When to use it
+## Recommended workflow
 
-Use it during debugging, after a benchmark warning, and when validating that no old model is still occupying VRAM.
-
-## `ollama logs`
-
-```bash
-ollama logs
-ollama logs 300
-```
-
-### What it does
-
-`ollama logs` displays recent systemd journal entries for the Ollama service. The optional numeric argument controls how many lines are shown.
-
-### How to interpret it
-
-Look for model-load failures, missing blobs, permission errors, GPU allocation failures, HTTP errors, and service restarts. Pair log review with the generated `failure-hints.txt` inside benchmark archives.
-
-### When to use it
-
-Use it after HTTP failures, unexpected model unloads, slow first request loads, or service instability.
-
-## `ollama test`
+For a new model:
 
 ```bash
-ollama test qwen2.5-coder:7b
-ollama test qwen3.6:35b qwen3.6:27b gpt-oss:20b
-ollama test qwen3.6:27b --profile perf
-ollama test qwen3.6:27b --load-mode observed
+ollama.sh test qwen3.6:27b
 ```
 
-### What it does
-
-`ollama test` runs generation tests through `/api/generate`. By default it uses an empty-card load policy and a three-prompt ADOS capability profile:
-
-| Prompt | Category | Purpose |
-|---|---|---|
-| `01_coding_first_prompt` | coding | Checks whether the model can produce useful code and concise tests. |
-| `02_essay_second_prompt` | essay | Checks structured prose and technical explanation. |
-| `03_internet_access_third_prompt` | internet access | Checks whether the local model honestly states that it cannot browse live web unless tools are provided. |
-
-Before the first prompt, the command attempts to unload resident Ollama models. This makes the run less dependent on the model currently loaded on the RTX card. The first prompt measures the first-request load path. The second and third prompts show warm interactive behavior after the model is loaded.
-
-When several models are provided in one command, the wrapper creates a single aggregate run directory and one ZIP archive containing all sub-runs.
-
-### How to interpret the results
-
-The terminal summary is the first artifact to read. Important lines:
-
-| Summary field | Meaning | Good result |
-|---|---|---|
-| `Test` | Overall test state and row counts. | `PASS` or `PASS_WITH_WARNINGS` with explainable warnings. |
-| `Residency` | Whether Ollama reports the tested model as fully GPU-resident or CPU/GPU offloaded. | `full GPU (100% GPU)` for clean RTX 3090 comparisons. |
-| `FirstReqLoad` | Ollama first request load duration after the selected load policy. | Lower is better; compare only under the same load mode. |
-| `FirstTTFT` | Time to first streamed token on the first prompt. | Expected to include load time in empty-card mode. |
-| `WarmTTFT` | Time to first streamed token after the model is loaded. | Better proxy for Cursor/OpenCode/Hermes interactive feel. |
-| `Visible` | Visible-answer token rate for valid rows. | Higher is better; thinking-only rows are not counted as visible-answer speed. |
-| `Output` | Counts visible rows, thinking-only rows, and errors. | Visible rows for all capability prompts unless the model intentionally thinks first. |
-| `Telemetry` | GPU monitor verdict. | `PASS`; warnings require review. |
-| `VRAM` | Peak GPU memory and warning/critical sample counts. | Less than 92% is comfortable; over 97% is high-risk for switching/offload. |
-| `Power` | Power draw and power-cap samples. | Software power-cap samples are normal when transient; hardware slowdown is critical. |
-| `PCIe` | Current link generation and width. | Lower links are warnings for load/offload/concurrency, not automatic decode invalidation. |
-
-### Result states
-
-| State | Meaning |
-|---|---|
-| `PASS` | The requested benchmark completed without material warnings. |
-| `PASS_WITH_WARNINGS` | The benchmark completed, but sample, output, hardware, residency, or telemetry warnings need review. |
-| `UNSUPPORTED` | The model role does not support the requested benchmark, such as an embedding-only model in generation mode. |
-| `INCONCLUSIVE` | The run did not produce enough valid evidence for the requested metric. |
-| `FAIL` | API, runtime, or validation errors occurred. |
-
-### Sample statuses
-
-| Sample status | Meaning |
-|---|---|
-| `OK` | The row has enough output for its profile. |
-| `SHORT_SAMPLE` | The model stopped too early for a stable throughput or long-context metric. |
-| `UNDERFILLED` | The prompt did not fill enough of the intended context window. |
-| `UNSUPPORTED` | The row is an intentional preflight block, not a failed API call. |
-
-### When to use it
-
-Use `ollama test` when selecting a local generation model for daily coding, prose, assistant, and ADOS-style runtime work. Use the default profile for operational model selection. Use `--profile perf` when you need long-context and sustained-decode performance rows.
-
-## `ollama bench`
-
-```bash
-ollama bench qwen2.5-coder:7b
-ollama bench qwen3-embedding:4b
-ollama bench qwen3-embedding:4b qwen2.5-coder:7b
-ollama bench qwen3.6:27b --profile perf
-```
-
-### What it does
-
-`ollama bench` resolves each model, inspects its role through Ollama metadata, and routes it:
+Review:
 
 ```text
-generation-capable model -> /api/generate monitored benchmark
-embedding-only model     -> /api/embed monitored benchmark
-unknown role             -> preflight refusal with evidence
+terminal-summary.txt
+recommendations.md
+performance-settings.md
+performance-settings.sh
+model-scorecard.csv
 ```
 
-Multi-model `bench` uses one aggregate ZIP archive, the same as multi-model `test`.
+Apply settings only when the scorecard and classification support the chosen use case.
 
-### How to interpret the results
-
-For generation models, read the same fields as `ollama test`.
-
-For embedding models, read:
-
-| Field | Meaning |
-|---|---|
-| `Embed` | Number of vectors, vector dimension, rows, pass count, and average embeddings per second. |
-| `LongEmb` | Whether a long input reached the intended context-fill target. |
-| `endpoint` | Should be `/api/embed`. |
-| `vector_dim` | Embedding vector size. This should be stable for a model. |
-| `embedding_tps` | Embeddings per second for the row. |
-| `prompt_eval_tokens` | Input tokens processed by the embedding endpoint when reported by Ollama. |
-
-### When to use it
-
-Use `ollama bench` when comparing mixed model sets or when you do not want to remember whether a model is generation-capable or embedding-only. It is the safest command for broad local model inventory checks.
-
-## `ollama embed-test`
+For multiple candidates:
 
 ```bash
-ollama embed-test bge-m3:latest
-ollama embed-test qwen3-embedding:4b
-ollama embed-test bge-m3:latest qwen3-embedding:4b
+ollama.sh test qwen2.5-coder:7b qwen3:8b qwen3.6:27b
 ```
 
-### What it does
-
-`ollama embed-test` forces `/api/embed` mode. It runs short-input, batch, long-context, and RAG-profile embedding probes while collecting monitor telemetry.
-
-### How to interpret the results
-
-Use this command to verify:
+Compare aggregate:
 
 ```text
-endpoint=/api/embed
-vector_count > 0
-vector_dim is present
-embedding_tps is present
-errors=0
+model-scorecard.csv
+recommendations.md
+performance-settings-all.md
 ```
 
-A generation model may or may not expose embedding behavior depending on its Ollama capabilities. An embedding-only model should pass here and should be reported as unsupported by strict generation tests.
-
-### When to use it
-
-Use it for RAG indexing, retrieval pipelines, document chunking tests, and validating embedding model health before wiring the model into a vector store.
-
-## Profiles
-
-### Default capability profile
+## Evidence levels
 
 ```bash
-ollama test MODEL
+ollama.sh test MODEL --evidence-level compact
+ollama.sh test MODEL --evidence-level standard
+ollama.sh test MODEL --evidence-level full
 ```
 
-Use the default profile for daily model selection. It answers three practical questions:
-
-```text
-Can the model code?
-Can the model write structured prose?
-Does the model avoid pretending to browse the internet?
-```
-
-### Performance profile
-
-```bash
-ollama test MODEL --profile perf
-```
-
-Use the performance profile for sustained decode and long-context behavior. It adds rows such as sanity, throughput, sustained generation, and long context. A long-context row is useful only when it has enough context fill and enough generated output.
-
-### Stress and concurrency probes
-
-```bash
-ollama test MODEL --stress
-ollama test MODEL --run-conc --concurrency 2
-ollama test MODEL --run-conc --concurrency 4
-```
-
-Use these when evaluating local agent workloads with overlapping requests. Concurrency results are more relevant for MCP servers, multi-agent task runners, and background ADOS workflows than for single-user chat.
-
-## Load modes
-
-| Load mode | Behavior | Use case |
-|---|---|---|
-| `empty-card` | Attempts to unload all resident Ollama models before the run and records whether the tested model was absent before first request. | Default comparable local benchmark. |
-| `observed` | Does not unload; records the current state. | Diagnosing real current workstation behavior. |
-| `warm` | Assumes or prepares warm behavior where applicable. | Interactive latency checks after a model is already loaded. |
-| `unload-model` | Unloads the tested model before the run. | Model-specific first-request checks. |
-| `restart-ollama` | Restarts the service before testing when available. | Stronger service-level load-state isolation. |
-
-`ColdVerified` means the benchmark verified the model-residency precondition for the selected mode. It does not prove operating-system page-cache coldness or physical disk throughput.
-
-## Files produced by a run
-
-A single-model monitored run creates one run directory and, unless disabled, one ZIP archive. A multi-model command creates one aggregate run directory and one aggregate ZIP archive containing each model sub-run.
-
-Important files:
-
-| File | Purpose |
-|---|---|
-| `terminal-summary.txt` | Compact human-readable summary. |
-| `orchestrator-summary.md` | Markdown report with links to component files and interpretation guidance. |
-| `test/*/summary.csv` | Sortable per-row metrics. |
-| `test/*/summary.md` | Detailed test-only summary. |
-| `test/*/capability-analysis.md` | Capability-profile validity notes. |
-| `test/*/load-state.txt` | Empty-card, observed, warm, unload, or restart evidence. |
-| `test/*/failure-hints.txt` | Classified failure hints and next actions. |
-| `test/*/raw/` | Raw Ollama JSON and streaming NDJSON. |
-| `test/*/payloads/` | Request payloads for reproducibility. |
-| `monitor/*/gpu.csv` | GPU telemetry samples. |
-| `monitor/*/report.md` | Hardware monitor summary. |
-| `hardware/` | Start/end NVIDIA snapshots. |
-| `multi-model-summary.md` | Aggregate report for multi-model commands. |
-| `multi-model-index.csv` | Machine-readable index for multi-model commands. |
-
-The archive intentionally keeps raw API evidence and monitor CSV files because they are needed to audit benchmark claims. Scratch timestamp sidecars and duplicate nested ZIPs are not part of the durable output.
-
-## Choosing a model from benchmark data
-
-Use the workload, not one global score.
-
-| Workload | Primary metrics | Preferred traits |
-|---|---|---|
-| Cursor / IDE loop | warm TTFT, visible token rate, low VRAM pressure | Fast warm response and clean full-GPU residency. |
-| OpenCode terminal agent | coding prompt quality, warm TTFT, visible token rate, VRAM headroom | Fast coding responses and enough context headroom for project files. |
-| Hermes Agent | warm TTFT, model-switch cost, memory headroom, stable output | Reliable long-running agent behavior and low risk of offload. |
-| ADOS workflows | coding/prose/internet-boundary behavior, evidence quality, optional perf and concurrency rows | Transparent outputs, valid capability rows, and reproducible evidence. |
-| RAG / embeddings | vector dimension, embedding throughput, batch behavior, long input behavior | Stable `/api/embed` results and predictable vector shape. |
-
-A larger model is not automatically better for local agentic use. A smaller model with fast warm TTFT, low VRAM pressure, and clean full-GPU residency is usually better for tight coding loops. Larger or offloaded models are more appropriate for background analysis when latency is less important.
-
-## Practical interpretation rules
-
-1. Treat the first prompt in empty-card mode as a load-path measurement, not normal interactive latency.
-2. Use the second and third prompts for warm interactive latency.
-3. Exclude thinking-only rows from visible-answer speed comparisons.
-4. Treat CPU/GPU offload as a warning for clean RTX 3090 comparisons.
-5. Treat VRAM above 97% as high-risk for model switching, fragmentation, and OOM.
-6. Use `--profile perf` before making long-context claims.
-7. Use concurrency probes before making multi-agent or MCP service claims.
-8. Use `embed-test` before making RAG indexing claims.
-
-## Troubleshooting
-
-| Symptom | Likely meaning | Next action |
-|---|---|---|
-| `UNSUPPORTED` for `ollama test` | The selected model is embedding-only or cannot generate. | Run `ollama bench MODEL` or `ollama embed-test MODEL`. |
-| `Residency: WARN cpu_gpu_offload` | Ollama reports that the model is not fully GPU-resident. | Use a smaller model, lower context, free VRAM, or accept that the result is mixed CPU/GPU. |
-| Huge `FirstReqLoad` but low `WarmTTFT` | Model loading is slow, but interaction after load is acceptable. | Keep the model warm or investigate model storage and switching. |
-| `SHORT_SAMPLE` | The model stopped too early for a stable metric. | Use prompts that force longer output or inspect whether the task naturally ends early. |
-| High VRAM critical count | Model is close to the 24 GB limit. | Avoid model switching, concurrent requests, and larger context windows. |
-| Hardware slowdown | NVIDIA reports actual hardware slowdown. | Stop testing and inspect power, thermals, clocks, and system health. |
-
-## Bash aliases
-
-The provided Bash integration defines short aliases:
-
-| Alias | Expands to |
-|---|---|
-| `os` | `ollama_status` |
-| `oq` | `ollama_quick_status` |
-| `ost` | `ollama_start` |
-| `osp` | `ollama_stop` |
-| `om` | `ollama_models` |
-| `og` | `ollama_gpu` |
-| `ol` | `ollama_logs` |
-| `ot` | `ollama_test` |
-| `ob` | `ollama_bench` |
-| `oet` | `ollama_embed_test` |
-
-## Package boundary
-
-The package contains source scripts, Bash integration, changelog, and quality evidence. Runtime logs, benchmark runs, temporary files, caches, generated archives, nested ZIPs, and machine-specific output belong outside the source package except when deliberately included as QA evidence.
+`standard` keeps human summaries, scorecards, settings, environment facts, runner facts, CSVs, and key raw files. `compact` removes low-value raw stream files. `full` keeps all raw stream artifacts.
