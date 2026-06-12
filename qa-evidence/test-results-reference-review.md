@@ -1,12 +1,14 @@
-# v1.11 final reference test review
+# Reference result review
 
-The new v1.11 test run proved that typed `think:false` fixed the earlier HTTP 400 defect, but exposed a final measurement-integrity defect: context-pressure rows with `eval_tokens=1` were counted as valid and produced impossible visible speed values around 1,000,000 tok/s.
+The clean v1.11 resident-warm rerun proved that default testing is now operational and much faster than full diagnostics. It also showed two remaining usability gaps: final summaries were hard to interpret, and Hermes main-chat context was unresolved because 65K context was not validated.
 
-Final v1.11 fixes this by requiring context-pressure rows to meet minimum output gates before they validate context settings:
+v1.12 response:
 
-```text
-eval_tokens >= 128
-response_chars >= 120
-```
-
-Rows below the gate are classified as `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`, are excluded from visible speed averages, cannot set `context_validated=1`, and cannot produce `HIGH_CONFIRMED` settings.
+- add `ollama test --full MODEL...` for all lanes;
+- add `--min-context 65536` as the explicit Hermes context gate;
+- add `ollama context-test MODEL... --min-context 65536`;
+- redesign per-model and aggregate summaries into tables;
+- expose preload/model-ready time separately from warm TTFT;
+- emit `context-summary.csv` and `hermes-compatibility.md`;
+- prevent Hermes main-chat recommendation unless `hermes_65k_context=PASS`;
+- preserve fast resident-warm default for routine model comparison.

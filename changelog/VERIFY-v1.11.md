@@ -1,12 +1,10 @@
-# Verify v1.11 final
+# Verify v1.11
 
 Verification targets:
 
-- Bash and Python syntax pass.
-- One-token context rows become inconclusive.
-- One-token context rows do not inflate visible speed.
-- One-token context rows do not validate 8K/16K context.
-- Settings confidence downgrades when context proof is absent.
-- Routine `ollama test` defaults to resident-warm; full diagnostic is explicit.
-- README documents command defaults and context gates.
-- Package hygiene passes.
+- Bash syntax over shell scripts.
+- Python syntax over helper scripts.
+- Fake Ollama success harness confirms boolean `think:false` payload and PASS summary.
+- Fake Ollama failure harness confirms TOOL_FAILURE, RootErr, nonzero exit, no recommendations, and LOW_UNCONFIRMED settings.
+- Aggregate fake harness confirms aggregate recommendations only from decision-grade rows.
+- Package hygiene confirms no runtime runs, nested zips, pycache, pyc, or OS debris.

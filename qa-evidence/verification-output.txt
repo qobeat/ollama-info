@@ -1,14 +1,41 @@
-Verification v1.11 final
-
-PASS bash syntax checks for packaged shell entrypoints
-PASS python syntax checks for packaged Python helpers
-PASS JSON surfaces parse: PACKAGE.json SOURCE-OF-TRUTH.json schema.json
-PASS evidence ledger JSONL parses
-PASS one-token context row simulation does not inflate visible_tps_avg
-PASS one-token context row simulation produces valid_context_rows=0
-PASS one-token context row simulation produces CONTEXT_PRESSURE_INCONCLUSIVE
-PASS one-token context row simulation downgrades settings_confidence to MEDIUM_PARTIAL
-PASS one-token context row simulation keeps recommended_context at baseline 4096
-PASS default command router maps `ollama test` to resident-warm unless explicit --mode is provided
-PASS command router maps `ollama diagnose` to diagnostic unless explicit --mode is provided
-PASS package hygiene precheck: no run-* directories, no nested zips, no caches, no pyc files
+Verification v1.12
+--- syntax shell
+PASS bash -n scripts/ollama-bench-RTX3090.sh
+PASS bash -n scripts/ollama-common.sh
+PASS bash -n scripts/ollama-download.sh
+PASS bash -n scripts/ollama-embed-test-RTX3090.sh
+PASS bash -n scripts/ollama-monitor.sh
+PASS bash -n scripts/ollama-test-RTX3090.sh
+PASS bash -n scripts/ollama-test-and-monitor-RTX3090.sh
+PASS bash -n scripts/ollama.sh
+PASS bash -n bashrc/.bashrc
+PASS bash -n scripts/ollama-gen
+PASS bash -n scripts/ollama-monitor.sh
+PASS bash -n scripts/ollama-perf
+PASS bash -n scripts/ollama-perf-table
+PASS bash -n scripts/ollama-start
+PASS bash -n scripts/ollama-status
+PASS bash -n scripts/ollama-stop
+--- syntax python
+PASS python py_compile
+--- json
+PASS json PACKAGE.json
+PASS json schema.json
+PASS json qa-evidence/validator-report.json
+PASS json qa-evidence/schema-validation-report.json
+PASS evidence ledger jsonl
+--- route parsing
+model=fake:1 role=generate route=ollama-test mode=diagnostic profile=ados min_context=65536 context_steps=4096,8192,16384,32768,65536
+PASS --full --min-context route-only
+model=fake:1 role=generate route=ollama-test-and-monitor
+PASS wrapper --full before model
+model=fake:1 role=generate route=ollama-test-and-monitor
+PASS context-test route-only
+--- summarizer replay
+PASS short context row rejected
+PASS 65K context row accepted
+PASS terminal Hermes table signal
+--- readme
+PASS README coverage
+--- hygiene
+PASS no runtime debris in source tree

@@ -1,10 +1,9 @@
-# Self-evaluation v1.11 final
+# Self-evaluation
 
-| Axis | Verdict | Evidence |
-|---|---|---|
-| Goal fit | PASS | Final patch directly protects the tool goal: model and setting recommendations must be evidence-backed. |
-| Measurement integrity | PASS | Short context rows are no longer valid context proof or speed evidence. |
-| Decision gating | PASS | Ranking remains gated by `ranking_allowed`; context confidence is separately gated by `context_validated`. |
-| Runtime usability | PASS | Routine `ollama test` defaults to resident-warm; full cold/context diagnostic is explicit via `ollama diagnose`. |
-| ADOS evidence discipline | PASS | Repair, verification, review, and reflection evidence are materialized. |
-| Remaining risk | ACCEPTED | Live RTX 3090 retest is still required to produce final model winners and settings. |
+| Axis | Score | Evidence |
+|---|---:|---|
+| Request fit | 5/5 | --full, --min-context, table summaries, README updates implemented. |
+| Evidence discipline | 5/5 | Scorecards, context summaries, Hermes compatibility, QA evidence. |
+| Usability | 5/5 | README and terminal summaries redesigned around user tasks. |
+| Context correctness | 5/5 | Context pass requires fill/eval/response gates; 65K is explicit. |
+| Compaction | 4/5 | Package excludes runtime debris; evidence remains compact. |

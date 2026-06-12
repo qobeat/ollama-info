@@ -1,0 +1,10 @@
+AR-001 --full is accepted before or after model names.
+AR-002 --min-context N is accepted and appears in context gates.
+AR-003 ollama context-test routes to context-pressure with min-context default 65536.
+AR-004 terminal-summary.txt uses tables.
+AR-005 model-scorecard.csv includes preload_wait_s and model_ready_s.
+AR-006 model-scorecard.csv includes hermes_65k_context.
+AR-007 context-summary.csv reports context verdicts.
+AR-008 aggregate-terminal-summary.txt reports rankings and use-case winners.
+AR-009 README documents GOAL, Objectives, commands, context gates, and settings confidence.
+AR-010 package excludes runtime debris.

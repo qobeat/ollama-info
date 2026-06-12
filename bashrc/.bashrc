@@ -7,6 +7,9 @@ ollama-models() { ollama-info-wrapper models "$@"; }
 ollama-gpu() { ollama-info-wrapper gpu "$@"; }
 ollama-logs() { ollama-info-wrapper logs "$@"; }
 ollama-test() { ollama-info-wrapper test "$@"; }
+ollama-diagnose() { ollama-info-wrapper diagnose "$@"; }
+ollama-context-test() { ollama-info-wrapper context-test "$@"; }
+ollama-compare() { ollama-info-wrapper compare "$@"; }
 ollama-bench() { ollama-info-wrapper bench "$@"; }
 ollama-embed-test() { ollama-info-wrapper embed-test "$@"; }
 ollama-preload() { ollama-info-wrapper preload "$@"; }

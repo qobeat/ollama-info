@@ -1,379 +1,239 @@
 # ollama-info
 
-`ollama-info` is a local Ollama, WSL2/Linux, and RTX 3090 diagnostic toolkit for model selection and performance-setting selection.
+`ollama-info` is a local Ollama evaluation and configuration tool for an RTX 3090 workstation. It measures local model behavior, qualifies model suitability for coding/chat/Hermes/ADOS workflows, and emits reviewable WSL2/Linux Ollama settings that can be applied through a systemd drop-in.
 
-It is designed for local development workflows where the wrong model or the wrong Ollama service configuration can waste minutes per prompt, silently push a model into CPU/GPU offload, or produce misleading benchmark results.
+The tool is designed for a single-developer workstation where practical latency, model residency, context window, GPU memory pressure, and repeatable evidence matter more than a single raw tokens-per-second number.
 
 ## GOAL
 
-```text
-Identify the best local Ollama model and the best safe Ollama configuration for the current host, GPU, model set, and target workload.
-```
+Identify the best local Ollama model and the safest performance configuration for each target use case on the current RTX 3090 / WSL2 / Ollama environment.
 
-The tool must answer four practical questions:
+The goal surface has five mandatory facets:
 
-1. Which tested model is the best coding model for OpenCode, Cursor, and code-heavy repair/apply loops?
-2. Which tested model is the best chat / Hermes / ADOS runtime model?
-3. Which models are only good when kept resident, and which are safe for frequent load/switch workflows?
-4. Which WSL2/Linux Ollama service settings are confirmed, partially supported, or unconfirmed for each selected model?
+| Facet | Required result |
+|---|---|
+| Performance measurement | Warm TTFT, visible tokens/sec, preload/model-ready cost, VRAM use, residency, and error state are captured per model. |
+| Use-case selection | Results are reported separately for coding, chat, Hermes, ADOS, ADOS code-repair, heavy reasoning, and vision. |
+| Context validation | A model is not considered Hermes main-chat compatible unless it passes the requested context gate, normally `--min-context 65536`. |
+| Settings output | The run emits `recommended-ollama-env.conf` and `performance-settings.sh` with confidence labels. |
+| Evidence discipline | Every recommendation is backed by CSV/Markdown evidence and downgraded when evidence is partial, contaminated, or missing. |
 
 ## Objectives
 
-| Objective | Success condition |
-|---|---|
-| Measure model performance | The result includes valid generation or embedding rows, TTFT, visible-answer speed, load duration, VRAM pressure, and residency classification. |
-| Evaluate ADOS capability | Coding, essay, and internet-boundary prompts produce visible evidence and capability verdicts. |
-| Compare models safely | Aggregate recommendations are emitted only from decision-grade rows. Failed rows do not produce winners. |
-| Tune configuration | The output includes `recommended-ollama-env.conf`, `performance-settings.sh`, and `performance-settings.md` with confidence level and rationale. |
-| Protect against misleading results | API/tool failures, unsupported roles, thinking-only output, CPU/GPU offload, and unvalidated context settings are surfaced as blocking or review states. |
-| Preserve evidence | Every run produces compact reviewable artifacts: scorecard, recommendations, settings, environment facts, runner facts, raw payloads/metrics as configured by evidence level. |
+| Objective | Implementation surface | Success condition |
+|---|---|---|
+| Measure daily model usability | `ollama test MODEL` | Runs resident-warm ADOS probes and reports warm TTFT/TPS. |
+| Measure full model readiness | `ollama test --full MODEL` | Runs empty-card, resident-warm, and context-pressure lanes. |
+| Validate Hermes context | `ollama test --full --min-context 65536 MODEL` or `ollama context-test MODEL --min-context 65536` | Reports `Hermes65K=PASS` only when the context row passes fill/output gates. |
+| Avoid false context positives | `context-summary.csv`, `hermes-compatibility.md` | HTTP 200 with one/few tokens becomes `CONTEXT_ACCEPTED_SHORT_OUTPUT`, not a pass. |
+| Produce clear summaries | `terminal-summary.txt`, `summary.md`, aggregate summary | Output uses tables for execution state, performance, capability rows, context, settings, and use-case recommendations. |
+| Produce applyable settings | `recommended-ollama-env.conf`, `performance-settings.sh` | Settings include confidence and conservative defaults when context is not confirmed. |
+| Support future enhancement | `requirements.md`, `schema.json`, `qa-evidence/` | Project surfaces remain compact, traceable, and evidence-backed. |
 
 ## Installation
 
-```bash
-cd ~/dev
-unzip ollama-info.zip
-export OLLAMA_INFO_HOME="$HOME/dev/ollama-info"
-source "$OLLAMA_INFO_HOME/bashrc/.bashrc"
-```
+Copy the repository folder somewhere on your WSL2/Linux host, then source or install the wrapper from `bashrc/.bashrc` so that `ollama` subcommands delegate to `scripts/ollama.sh` when appropriate.
 
-The canonical entrypoint is:
+Typical direct usage from the project root:
 
 ```bash
-$OLLAMA_INFO_HOME/scripts/ollama.sh
+scripts/ollama.sh status
+scripts/ollama.sh test qwen3:8b
 ```
 
-You may alias it as `ollama` only when you intentionally want unknown commands to pass through to the native Ollama CLI.
+## Command reference
 
-## Result validity model
+### `ollama status`
 
-The tool separates **measurement artifacts** from **decision claims**.
+Shows Ollama service status, API version, and RTX 3090 state.
 
-A run is **decision-grade** only when it has enough successful evidence for the requested decision. For example, a coding-model recommendation requires at least one valid visible coding row. A context recommendation above the baseline requires a passing context-pressure row. If all generation rows fail, the run is a tool/model/API failure, not a model-selection result.
+Use when checking whether Ollama and the GPU are ready before testing.
 
-Important states:
+### `ollama models`
 
-| State | Meaning |
+Lists local models, inferred role, size, and suggested command.
+
+Use when deciding which local tag to benchmark. Embedding models should be tested with `embed-test` or `bench`, not plain generation tests.
+
+### `ollama test MODEL [MODEL...]`
+
+Runs the default daily benchmark: resident-warm ADOS probes at the baseline context, normally `4096`.
+
+It measures:
+
+| Metric | Meaning |
 |---|---|
-| `PASS` | Required rows succeeded and can support recommendations. |
-| `PASS_WITH_WARNINGS` | Core rows passed, but hardware/output/context warnings exist. |
-| `PASS_WITH_REVIEW` | Rows ran, but visible-output or validator issues require review. |
-| `PASS_WITH_SKIPS` | Required decision may be valid, but some optional/unsafe rows were skipped. |
-| `TOOL_FAILURE` | Required rows failed because the request, API, runtime, or tool path failed. No winner is emitted. |
-| `UNSUPPORTED` | The selected command is not valid for the model role, for example generation test against an embedding-only model. |
-| `NO_ROWS` | No usable rows were produced. |
+| Preload wait | Time spent making the model resident before measured prompts. |
+| Warm TTFT | Time to first answer token when the model is resident. |
+| Visible tok/s | Answer throughput from resident-warm capability rows only. |
+| VRAM | GPU memory pressure during or after the run. |
+| Capability rows | Coding, essay, and internet-access boundary probes. |
 
-Decision labels:
+Use this for fast daily comparisons and for deciding which model feels responsive for OpenCode, Cursor, Hermes fallback chat, or ADOS at ordinary context sizes.
 
-| Label | Meaning |
-|---|---|
-| `FULL_GPU_RESIDENT` | The model appears fully GPU-resident in `ollama ps`. |
-| `CPU_GPU_OFFLOAD_RISK` | The model is split between CPU and GPU; throughput is not a clean RTX 3090 resident result. |
-| `GOOD_WARM_BAD_COLD` | Warm latency is good but first-load latency is high; use preload/keep-alive. |
-| `RESIDENT_ONLY_RECOMMENDED` | Use this model after preloading; avoid frequent unload/reload workflows. |
-| `VRAM_CRITICAL_HEADROOM` | VRAM pressure exceeds the critical threshold; do not raise context or parallelism by default. |
-| `CONTEXT_INCREASE_NOT_RECOMMENDED` | Higher context was unsafe, untested, or blocked by VRAM/offload evidence. |
-| `THINKING_ONLY_OUTPUT_RISK` | The model produced thinking text without visible answer text for a capability row. |
-| `NO_VALID_GENERATION_ROWS` | No successful visible generation rows exist. |
-| `NO_MODEL_RANKING` | The run cannot support best-model claims. |
+`ollama test` does **not** confirm Hermes 65K context compatibility. It will report context as not tested.
 
-## Commands
+Example:
 
-### `ollama.sh status`
-
-Shows Ollama service state, API version, and RTX GPU snapshot.
-
-Use it before testing to confirm:
-
-```text
-api: RUNNING
-GPU visible through nvidia-smi
-idle VRAM is not unexpectedly high
+```bash
+ollama test llama3.1:8b qwen2.5vl:7b qwen3:8b
 ```
 
-Interpretation:
+### `ollama test --full MODEL [MODEL...]`
 
-- `api: RUNNING` means the local Ollama HTTP API responded.
-- `gpu: NVIDIA ...` means the Linux/WSL2 environment can see the GPU.
-- High idle VRAM means a model or another process may already be resident.
-
-### `ollama.sh models`
-
-Lists local models, inferred role, approximate size, and suggested commands.
-
-Interpretation:
-
-- `generate` models can be tested with `ollama.sh test`.
-- `embedding` models should use `ollama.sh embed-test` or `ollama.sh bench`.
-- Ambiguous patterns resolve by exact match first, then base tag, then unique substring.
-
-### `ollama.sh test MODEL`
-
-Runs the default fast resident-warm generation comparison for one model.
-
-Default lane:
+Runs all lanes:
 
 | Lane | Purpose |
 |---|---|
-| `resident-warm` | Preloads the model with `keep_alive` and runs ADOS capability prompts. |
-| `settings` | Emits applyable Ollama service settings with confidence/rationale. |
-| `environment` | Logs Ollama version, service environment, WSL/kernel facts, GPU facts, and model metadata. |
+| Empty-card | Measures first-load/model-switch behavior. |
+| Resident-warm | Measures daily practical performance. |
+| Context-pressure | Tests larger context windows up to the configured minimum context. |
 
-Use this for routine model comparison after you know the host is healthy. It avoids paying empty-card first-load cost for every routine run. Use `ollama.sh diagnose MODEL` or `--mode diagnostic` when you need first-load and context-pressure proof.
+By default, `--full` builds a context ladder up to `65536`, unless `--min-context` or `--context-steps` changes it.
 
-Main artifacts:
+Use this when confirming settings or checking whether a model can serve as a main Hermes chat model.
 
-```text
-summary.md
-terminal-summary.txt
-model-scorecard.csv
-recommendations.md
-recommended-ollama-env.conf
-performance-settings.sh
-performance-settings.md
-environment-summary.md
-runner-log-facts.md
-capability-analysis.md
-```
-
-Important fields:
-
-| Field | Meaning |
-|---|---|
-| `FirstTTFT` | Time to first stream chunk on the first request. |
-| `FirstReqLoad` | Ollama load duration reported on the first request. This is not a pure disk-read benchmark. |
-| `WarmTTFT` | First-answer latency for resident-warm rows. This is the key daily-use metric. |
-| `Visible answer speed` | Tokens/sec for visible answer output. Thinking-only output is not counted as visible speed. |
-| `Valid generation rows` | Number of successful visible-output rows. Zero means no model ranking. |
-| `Valid capability rows` | Number of successful ADOS capability rows. Used for use-case recommendations. |
-| `Valid context rows` | Number of successful context-pressure rows. Required before larger context is called confirmed. |
-| `RootErr` | First captured API/tool error. This is the first place to look when rows fail. |
-| `Settings confidence` | `HIGH_CONFIRMED`, `MEDIUM_PARTIAL`, or `LOW_UNCONFIRMED`. |
-
-### `ollama.sh test MODEL --quick`
-
-Runs the shortest generation/capability check. This is equivalent to a compact resident-warm ADOS probe.
-
-Use it for smoke checks. Do not use a quick run alone to confirm larger context settings.
-
-### `ollama.sh diagnose MODEL`
-
-Runs the full diagnostic suite:
-
-```text
-empty-card first-load
-resident-warm ADOS prompts
-context-pressure settings validation
-settings recommendation
-environment/runner evidence
-```
-
-Use this when selecting final settings for a model, investigating cold-load time, or deciding whether 8K/16K context is safe.
-
-### `ollama.sh test MODEL --mode empty-card`
-
-Runs only the first-load lane.
-
-Use it to answer:
-
-```text
-How expensive is the first prompt after unload/restart/model switch?
-```
-
-A model can be bad in this mode but still good as a resident model.
-
-### `ollama.sh test MODEL --mode resident-warm`
-
-Runs the daily-use lane after preloading the model.
-
-Use it for OpenCode, Cursor, Hermes, and ADOS workflows where a model is intentionally kept loaded.
-
-Best interpretation:
-
-```text
-WarmTTFT < 1s is usually interactive.
-Visible tok/s determines output comfort.
-Visible output and capability verdicts matter more than raw eval speed.
-```
-
-### `ollama.sh test MODEL --mode context-pressure`
-
-Runs only context-pressure steps.
-
-Use it before raising:
-
-```text
-OLLAMA_CONTEXT_LENGTH
-num_ctx
-```
-
-Default context steps are:
-
-```text
-4096,8192,16384
-```
-
-The tool skips higher steps when current VRAM is already critical unless you pass:
+Example:
 
 ```bash
---force-context-pressure
+ollama test --full --min-context 65536 qwen3:8b llama3.1:8b
 ```
 
-A larger context setting is confirmed only when a matching context-pressure row passes the minimum-output gate. A row that returns HTTP 200 but generates only one or a few tokens is classified as `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`; it proves request acceptance only and does not validate speed or settings.
+### `ollama context-test MODEL [MODEL...] --min-context 65536`
 
-Default minimum-output gate:
+Runs context-pressure validation only. This is the shortest command for checking large-context suitability.
 
-```text
-eval_tokens >= 128
-response_chars >= 200
-```
+A context row passes only when all required gates pass:
 
-### `ollama.sh test MODEL_A MODEL_B ...`
+| Gate | Default requirement |
+|---|---:|
+| HTTP status | `200` |
+| Prompt fill | at least `65%` of requested context |
+| Eval tokens | at least `128` |
+| Response chars | at least `500` |
+| Root error | none |
 
-Runs multi-model resident-warm generation comparison and produces one aggregate ZIP. Use `ollama.sh diagnose MODEL_A MODEL_B ...` for the slower full diagnostic comparison with empty-card and context-pressure lanes.
+If the model accepts the request but emits only one/few tokens, the row is classified as `CONTEXT_ACCEPTED_SHORT_OUTPUT`. That is not a pass and cannot confirm settings.
 
-Aggregate artifacts:
-
-```text
-multi-model-index.csv
-multi-model-summary.md
-model-scorecard.csv
-recommendations.md
-performance-settings-all.md
-runs/run-*/...
-```
-
-Aggregate recommendations are emitted only from rows where `ranking_allowed=1`. If all candidates fail, `recommendations.md` explicitly says no winner was emitted.
-
-### `ollama.sh bench MODEL_A MODEL_B ...`
-
-Role-aware benchmark command.
-
-Routing:
-
-```text
-generation model -> generation diagnostic
-embedding model  -> embedding/RAG benchmark through /api/embed
-mixed list       -> one aggregate benchmark ZIP
-```
-
-Use this when the model list may contain both generation and embedding models.
-
-### `ollama.sh embed-test MODEL`
-
-Runs embedding/RAG tests through Ollama `/api/embed`.
-
-Rows:
-
-```text
-short sanity input
-batch chunks
-RAG-like document chunks
-```
-
-Interpretation:
-
-| Field | Meaning |
-|---|---|
-| `vector_dim` | Embedding width. |
-| `vector_count` | Number of vectors returned. |
-| `embeddings_per_s` | Request-level embedding throughput. |
-| `embed_tokens_per_s` | Approximate indexing throughput. |
-
-Do not compare embedding models with generation models by tokens/sec. They answer different workload questions.
-
-### `ollama.sh preload MODEL --ctx 4096 --keep-alive 24h`
-
-Preloads a model and asks Ollama to keep it resident.
-
-Use this when a diagnostic reports:
-
-```text
-GOOD_WARM_BAD_COLD
-RESIDENT_ONLY_RECOMMENDED
-```
-
-After preloading, verify:
+For Hermes main chat, run:
 
 ```bash
-ollama ps
+ollama context-test qwen3:8b qwen2.5vl:7b llama3.1:8b --min-context 65536
 ```
 
-Expected evidence:
+### `ollama diagnose MODEL [MODEL...]`
 
-```text
-model present
-100% GPU when full residency is expected
-keep-alive expiry in the future
+Alias for a full diagnostic. It prepends `--full` and is intended for deeper validation, not daily quick comparisons.
+
+Example:
+
+```bash
+ollama diagnose qwen2.5-coder:14b --min-context 65536
 ```
 
-### `ollama.sh compare MODEL_A MODEL_B ...`
+### `ollama compare MODEL [MODEL...]`
 
-Alias for multi-model generation comparison. It is intended for decision-grade model selection.
+Alias for multi-model generation comparison. It uses the same options as `test`.
 
-### `ollama.sh gpu`
+Example:
 
-Shows raw `nvidia-smi` output.
-
-Use it when investigating thermal, power, PCIe, or VRAM behavior.
-
-### `ollama.sh logs [N]`
-
-Shows recent Ollama systemd logs.
-
-Use this when the summary reports:
-
-```text
-slow runner startup
-missing or unconfirmed KV cache type
-CPU/GPU offload
-API root error
-invalid request payload
+```bash
+ollama compare qwen3:8b qwen2.5-coder:14b llama3.1:8b
 ```
 
-## Test configuration options
+### `ollama bench MODEL [MODEL...]`
 
-| Option | Meaning | When to use |
-|---|---|---|
-| `--num-ctx N` | Baseline context for generation rows. | Start at `4096` for large models on 24 GB VRAM. |
-| `--num-predict N` | Output budget for ADOS capability rows. | Increase when coding/essay rows truncate. |
-| `--context-steps CSV` | Context-pressure sequence. | Use `4096,8192` for conservative tests; add `16384` only with enough VRAM. |
-| `--keep-alive V` | Ollama keep-alive for resident-warm testing. | Use `24h` for heavy resident models. |
-| `--think false|true|low|medium|high|max|none` | Controls Ollama thinking parameter. | Default is JSON boolean `false`; `none` omits the field. |
-| `--temperature X` | Generation temperature. | Keep low for repeatable diagnostics. |
-| `--evidence-level compact|standard|full` | Controls runtime artifact volume. | Use `standard` for review; `compact` for routine tests; `full` for debugging. |
-| `--strict-exit` | Nonzero exit for review/fail states. | Use in CI or scripted regression checks. |
-| `--route-only` | Resolve route without executing. | Use to verify role and command routing. |
+Role-aware benchmark route:
 
-### Thinking parameter nuance
+| Model role | Route |
+|---|---|
+| generation | generation benchmark/test |
+| embedding | `/api/embed` benchmark |
 
-The `think` field must be valid JSON. Boolean false must be sent as:
+Use this when the model list may mix generation and embedding models.
 
-```json
-"think": false
+### `ollama embed-test MODEL [MODEL...]`
+
+Runs embedding/RAG checks through `/api/embed`. It reports vector count, vector dimension, embedding throughput, and batch behavior.
+
+Use for `bge-m3`, `qwen3-embedding`, and other embedding-only models.
+
+### `ollama preload MODEL --ctx N --keep-alive 24h`
+
+Preloads a model and verifies residency with `ollama ps`.
+
+Use before OpenCode, Cursor, Hermes, or ADOS sessions when a model has good warm performance but high preload/model-switch cost.
+
+Example:
+
+```bash
+ollama preload qwen3.6:27b-q4_K_M --ctx 4096 --keep-alive 24h
 ```
 
-not as:
+## Output files
 
-```json
-"think": "false"
-```
+Each single-model run emits a folder and, unless disabled, a ZIP. The most important files are:
 
-The diagnostic payloads preserve this distinction. Use `--think none` to omit the field entirely.
+| File | Purpose |
+|---|---|
+| `terminal-summary.txt` | Table-first summary shown in the console. |
+| `summary.md` | Full human-readable per-model report. |
+| `model-scorecard.csv` | Machine-readable decision and metric row. |
+| `context-summary.csv` | Machine-readable context-window evidence. |
+| `context-summary.md` | Human-readable context evidence and verdicts. |
+| `hermes-compatibility.md` | Explicit Hermes 65K result. |
+| `recommendations.md` | Per-model use-case recommendation. |
+| `recommended-ollama-env.conf` | Systemd drop-in body. |
+| `performance-settings.sh` | Script to apply recommended settings. |
+| `environment-summary.md` | Ollama, service, WSL2, and GPU environment facts. |
+| `runner-log-facts.md` | Extracted runner/server facts from Ollama logs. |
 
-## Performance setting output
+Multi-model runs additionally emit:
 
-Each generation run emits:
+| File | Purpose |
+|---|---|
+| `aggregate-terminal-summary.md` | Final aggregate table summary. |
+| `model-scorecard.csv` | Merged scorecard for all models. |
+| `recommendations.md` | Use-case winners and next tests. |
+| `performance-settings-all.md` | Settings rationale for all tested models. |
 
-```text
-recommended-ollama-env.conf
-performance-settings.sh
-performance-settings.md
-```
+## Interpreting settings confidence
 
-`recommended-ollama-env.conf` is the systemd drop-in body. `performance-settings.sh` applies that drop-in. `performance-settings.md` explains why the settings were chosen and whether the recommendation is confirmed.
+| Confidence | Meaning |
+|---|---|
+| `LOW_UNCONFIRMED` | The run did not produce enough valid evidence. Do not treat settings as tuned. |
+| `MEDIUM_WARM_ONLY` | Resident-warm performance passed, but larger context was not validated. |
+| `MEDIUM_CONTEXT_PARTIAL` | Some context evidence passed, but not the requested full context gate. |
+| `HIGH_CONTEXT_CONFIRMED` | Generation and requested context gates passed. |
 
-Typical safe RTX 3090 baseline:
+Hermes main chat requires `HIGH_CONTEXT_CONFIRMED` or at least `Hermes65K=PASS` for the chosen model.
+
+## Use-case logic
+
+The aggregate recommendations separate use cases instead of selecting one generic winner.
+
+| Use case | Selection considerations |
+|---|---|
+| OpenCode / Cursor coding | coding probe, coder-family bonus, warm TTFT, speed, VRAM. |
+| Chat default | warm TTFT, visible output speed, lower VRAM, no slow-thinking penalty. |
+| Hermes main chat | requires `Hermes65K=PASS`. |
+| Hermes fallback 4K | can use resident-warm performance when 65K is not yet validated. |
+| ADOS default | balanced runtime, visible output, internet-boundary behavior, speed. |
+| ADOS coding repair | coding-specialized model and coding row evidence. |
+| Vision default | requires vision-specific rows; text-only qwen2.5vl tests do not prove vision quality. |
+| Heavy reasoning | larger model lane, usually resident-only. |
+
+## Context-window rules
+
+Context validation is deliberately strict. A large context row is not accepted merely because Ollama returns HTTP 200.
+
+A passing context row must ingest enough prompt tokens, generate enough output tokens, produce enough visible text, and avoid root API errors. If a row emits only one token, it is marked short/inconclusive.
+
+This prevents false positives where a model appears to support 65K context but does not actually produce a meaningful answer at that context.
+
+## Recommended safe baseline
+
+Until a specific model receives context-confirmed settings, use:
 
 ```ini
 [Service]
@@ -385,127 +245,31 @@ Environment="OLLAMA_CONTEXT_LENGTH=4096"
 # Optional after explicit validation: Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 ```
 
-Settings confidence:
-
-| Confidence | Meaning |
-|---|---|
-| `HIGH_CONFIRMED` | Required generation and context-pressure rows passed the minimum-output gates. |
-| `MEDIUM_PARTIAL` | Main generation evidence passed, but not all tuning dimensions are confirmed. |
-| `LOW_UNCONFIRMED` | A safe baseline was emitted, but no best-parameter claim is made. |
-
-Do not apply a setting as “best” just because a file exists. Check `settings_confidence`, `context_validated`, root errors, and classifications first.
-
-## Recommended workflow
-
-### One model
-
-```bash
-ollama.sh test qwen2.5-coder:7b
-```
-
-For full settings confirmation, run:
-
-```bash
-ollama.sh diagnose qwen2.5-coder:7b
-```
-
-Review:
-
-```text
-terminal-summary.txt
-summary.md
-model-scorecard.csv
-recommendations.md
-performance-settings.md
-recommended-ollama-env.conf
-```
-
-Apply settings only when:
-
-```text
-status is PASS / PASS_WITH_WARNINGS / PASS_WITH_SKIPS
-ranking_allowed=1 for model-selection decisions
-settings_confidence is MEDIUM_PARTIAL or HIGH_CONFIRMED
-root_error is empty
-```
-
-### Multiple models
-
-```bash
-ollama.sh test qwen2.5-coder:7b qwen3:8b qwen3.6:27b-q4_K_M
-```
-
-Review aggregate:
-
-```text
-model-scorecard.csv
-recommendations.md
-performance-settings-all.md
-```
-
-A winner is valid only if the aggregate recommendation was generated from decision-grade rows. Context-pressure rows are excluded from visible speed averages, so one-token long-context rows cannot inflate rankings.
-
-### Embedding/RAG candidates
-
-```bash
-ollama.sh bench bge-m3:latest qwen3-embedding:4b
-```
-
-Use embedding results for RAG/indexing decisions, not for coding/chat generation decisions.
-
-## Output ZIP naming
-
-Single generation model:
-
-```text
-ollama-test-and-monitor-RTX3090-qwen2.5-coder_7b-YYYYMMDD-HHMMSS.zip
-```
-
-Multi-model generation:
-
-```text
-ollama-test-and-monitor-RTX3090-3models-YYYYMMDD-HHMMSS-multi.zip
-```
-
-Embedding:
-
-```text
-ollama-embed-test-RTX3090-bge-m3_latest-YYYYMMDD-HHMMSS.zip
-```
-
-## Evidence levels
-
-| Level | Behavior |
-|---|---|
-| `compact` | Keeps decision artifacts and removes low-value raw stream files. |
-| `standard` | Keeps summaries, scorecards, settings, environment facts, runner facts, CSVs, payloads, and useful raw metrics. |
-| `full` | Keeps all raw stream artifacts and debugging sidecars. |
+Apply only after reviewing `performance-settings.md` and the generated confidence label.
 
 ## Troubleshooting
 
-| Symptom | Likely meaning | Action |
+| Symptom | Likely cause | Action |
 |---|---|---|
-| `TOOL_FAILURE` and all rows HTTP 400 | Request/API payload problem or unsupported parameter. | Read `RootErr`, inspect `payloads/*.json`, rerun after repair. |
-| `NO_MODEL_RANKING` | No valid generation evidence. | Do not use recommendations; repair first. |
-| `Visible: N/A` | No visible answer speed was measured. | Check thinking-only rows, API errors, and raw outputs. |
-| `CONTEXT_INCREASE_NOT_RECOMMENDED` | VRAM/offload/context evidence blocks context increase. | Keep baseline context or use smaller model. |
-| `CONTEXT_PRESSURE_INCONCLUSIVE` | Context row returned too little output to validate speed/settings. | Do not treat 8K/16K as confirmed; rerun diagnose with better prompt or larger budget if needed. |
-| `CPU_GPU_OFFLOAD_RISK` | Model does not fully fit as tested. | Reduce context, reduce parallelism, or use smaller/quantized model. |
-| `Settings confidence: LOW_UNCONFIRMED` | Config file is a safe baseline only. | Do not treat it as best parameters. |
+| `HTTP 400 invalid think value` | Old package or bad request serialization | Upgrade package and rerun. |
+| `Visible tok/s` is missing | No visible answer or thinking-only output | Inspect raw output and capability-analysis. |
+| `Hermes65K=NOT_TESTED` | The run was resident-warm only | Run `ollama test --full --min-context 65536 MODEL`. |
+| `CONTEXT_ACCEPTED_SHORT_OUTPUT` | Model accepted context but did not produce enough output | Treat as inconclusive; do not confirm settings. |
+| Very long preload wait | Model switch/cold load or storage/runtime cost | Use `ollama preload` and keep the model resident. |
+| High VRAM before run | Other models/apps are resident | Stop Hermes/OpenCode/manual chat and rerun. |
 
-## Package evidence
+## Development and extension notes
 
-The package includes ADOS-style QA evidence surfaces:
+The package is organized around small shell/Python scripts:
 
-```text
-MANIFEST.md
-PACKAGE.json
-SOURCE-OF-TRUTH.json
-schema.json
-qa-evidence/evidence-ledger.jsonl
-qa-evidence/self-evaluation.md
-qa-evidence/verification-output.txt
-qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
-```
+| Script | Role |
+|---|---|
+| `scripts/ollama.sh` | command router and multi-model aggregation |
+| `scripts/ollama-test-RTX3090.sh` | generation/context test engine |
+| `scripts/ollama-test-and-monitor-RTX3090.sh` | hardware-snapshot wrapper |
+| `scripts/ollama-run-generate.py` | streaming `/api/generate` metrics collector |
+| `scripts/ollama-summarize-results.py` | scorecards, summaries, settings, recommendations |
+| `scripts/ollama-embed-test-RTX3090.sh` | `/api/embed` benchmark |
+| `scripts/ollama-common.sh` | shared helpers |
 
-These files exist to keep goal, objectives, validation, repair decisions, and package finalization reviewable.
+Add new test lanes by extending `ollama-test-RTX3090.sh`, then update `ollama-summarize-results.py` so the new evidence appears in scorecards and recommendation gates.

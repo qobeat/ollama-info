@@ -9,24 +9,38 @@ LOG_ROOT="${LOG_ROOT:-$HOME/log/ollama-test-and-monitor-RTX3090}"
 cmd="${1:-status}"; [[ $# -gt 0 ]] && shift || true
 usage(){ cat <<EOF_USAGE
 ollama.sh commands:
-  status                         show Ollama/API/GPU status
-  models                         list local models and roles
-  test MODEL [MODEL...] [opts]   fast resident-warm generation comparison; multi-model creates one ZIP
-  diagnose MODEL [MODEL...]      full diagnostic: empty-card + resident-warm + context-pressure
-  compare MODEL [MODEL...] [opts] alias for fast multi-model generation comparison
-  bench MODEL [MODEL...] [opts]  role-aware route: generation -> test, embedding -> embed-test
-  embed-test MODEL [MODEL...]    embedding/RAG benchmark through /api/embed
-  preload MODEL [--ctx N] [--keep-alive V]  preload and keep a model resident
-  start|stop|logs|gpu            service/GPU helpers
-  other args                     pass through to native ollama CLI
+  status                                show Ollama/API/GPU status
+  models                                list local models and roles
+  test [--full] MODEL [MODEL...] [opts] resident-warm by default; --full runs all lanes
+  compare MODEL [MODEL...] [opts]       alias for multi-model generation comparison
+  diagnose MODEL [MODEL...] [opts]      full diagnostic alias; includes context testing
+  context-test MODEL [MODEL...] --min-context 65536
+                                        context-window validation only
+  bench MODEL [MODEL...] [opts]         role-aware route: generation -> test, embedding -> embed-test
+  embed-test MODEL [MODEL...]           embedding/RAG benchmark through /api/embed
+  preload MODEL [--ctx N] [--keep-alive V]
+                                        preload and keep a model resident
+  start|stop|logs|gpu                   service/GPU helpers
+  other args                            pass through to native ollama CLI
 EOF_USAGE
 }
+
 split_models_opts(){
   MODELS=(); OPTS=()
   while [[ $# -gt 0 ]]; do
-    case "$1" in --*) OPTS+=("$1"); if [[ $# -ge 2 && "$2" != --* ]]; then OPTS+=("$2"); shift 2; else shift; fi;; *) MODELS+=("$1"); shift;; esac
+    case "$1" in
+      --full|--quick|--force-context-pressure|--strict-exit|--zip|--no-zip|--route-only|--dry-run|--terminal-summary|--no-terminal-summary)
+        OPTS+=("$1"); shift ;;
+      --model|--base-url|--out-dir|--run-id|--mode|--profile|--num-ctx|--num-predict|--min-context|--context-steps|--min-context-eval|--min-context-chars|--min-context-fill|--keep-alive|--temperature|--timeout-sec|--think|--evidence-level)
+        OPTS+=("$1" "$(ollama_require_arg_value "$1" "${2-}")"); shift 2 ;;
+      --*) OPTS+=("$1"); shift ;;
+      *) MODELS+=("$1"); shift ;;
+    esac
   done
 }
+
+has_opt(){ local x; for x in "${OPTS[@]:-}"; do [[ "$x" == "$1" ]] && return 0; done; return 1; }
+
 aggregate_generation(){
   split_models_opts "$@"
   [[ "${#MODELS[@]}" -gt 0 ]] || { "$SCRIPT_DIR/ollama-test-and-monitor-RTX3090.sh"; return; }
@@ -57,50 +71,7 @@ aggregate_generation(){
     echo "$resolved,$role,$status,$subrun,$score,$settings" >>"$agg/multi-model-index.csv"
     { echo "## $resolved"; echo; [[ -f "$subrun/terminal-summary.txt" ]] && sed 's/^/    /' "$subrun/terminal-summary.txt"; echo; } >>"$agg/multi-model-summary.md"
   done
-  python3 - <<'PY' "$agg"
-import csv, sys
-from pathlib import Path
-agg = Path(sys.argv[1])
-rows = []
-for p in sorted(agg.glob('runs/run-*/model-scorecard.csv')):
-    with p.open(newline='', encoding='utf-8') as f:
-        rr = list(csv.DictReader(f))
-        if rr:
-            r = dict(rr[0]); r['scorecard_path'] = str(p); rows.append(r)
-base_cols = ['model','role','status','decision_grade','mode','residency','classifications','valid_generation_rows','valid_capability_rows','valid_context_rows','api_error_rows','root_error','first_ttft_ms','first_load_s','warm_ttft_ms_avg','visible_tps_avg','vram_pct','recommended_context','context_validated','settings_confidence','keep_alive','max_loaded_models','num_parallel','flash_attention','kv_cache_type','ranking_allowed','scorecard_path']
-cols = base_cols + sorted({k for r in rows for k in r if k not in base_cols})
-with (agg/'model-scorecard.csv').open('w', newline='', encoding='utf-8') as f:
-    w = csv.DictWriter(f, fieldnames=cols); w.writeheader(); w.writerows(rows)
-def num(x, default=None):
-    try:
-        if x in ('', None): return default
-        return float(x)
-    except Exception:
-        return default
-eligible = [r for r in rows if r.get('role') == 'generate' and r.get('ranking_allowed') in ('1','true','True') and r.get('status','').startswith('PASS')]
-code_eligible = [r for r in eligible if num(r.get('visible_tps_avg'), -1) is not None and num(r.get('visible_tps_avg'), -1) >= 0 and 'THINKING_ONLY_OUTPUT_RISK' not in r.get('classifications','')]
-general_eligible = [r for r in eligible if 'CPU_GPU_OFFLOAD_RISK' not in r.get('classifications','') and 'THINKING_ONLY_OUTPUT_RISK' not in r.get('classifications','')]
-best_code = sorted(code_eligible, key=lambda r: (-num(r.get('visible_tps_avg'), -1), num(r.get('warm_ttft_ms_avg'), 999999), num(r.get('vram_pct'), 999)))[:1]
-best_general = sorted(general_eligible, key=lambda r: (num(r.get('warm_ttft_ms_avg'), 999999), num(r.get('vram_pct'), 999), -num(r.get('visible_tps_avg'), -1)))[:1]
-md = ['# Aggregate recommendations','']
-if not eligible:
-    md += [
-        'No aggregate winner is emitted because no model produced decision-grade generation evidence.',
-        '',
-        'Repair root errors and rerun before selecting OpenCode, Cursor, Hermes, or ADOS winners.',
-    ]
-else:
-    md.append(f"OpenCode/Cursor fast coding: `{best_code[0]['model']}`" if best_code else 'OpenCode/Cursor: no decision-grade coding candidate')
-    md.append(f"Hermes/ADOS balanced runtime: `{best_general[0]['model']}`" if best_general else 'Hermes/ADOS: no decision-grade general candidate')
-md += ['', 'Primary applyable settings are in each sub-run `performance-settings.sh`; compare all rows in `model-scorecard.csv`.']
-(agg/'recommendations.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
-out = ['# Performance settings by model','']
-for r in rows:
-    settings = Path(r['scorecard_path']).parent / 'performance-settings.md'
-    if settings.exists():
-        out.append(settings.read_text(encoding='utf-8', errors='ignore'))
-(agg/'performance-settings-all.md').write_text('\n\n---\n\n'.join(out), encoding='utf-8')
-PY
+  python3 "$SCRIPT_DIR/ollama-aggregate-summary.py" "$agg" --mode test
   local archive="$TMP_DIR/ollama-test-and-monitor-RTX3090-${#MODELS[@]}models-$run_id.zip"
   (cd "$(dirname "$agg")" && zip -qr "$archive" "$(basename "$agg")")
   echo "$archive" >"$agg/archive.path"
@@ -108,16 +79,14 @@ PY
   if [[ "$failures" -gt 0 ]]; then return 1; fi
   if [[ "$unsupported" -gt 0 ]]; then return 0; fi
 }
+
 aggregate_embed(){
   split_models_opts "$@"
   [[ "${#MODELS[@]}" -gt 0 ]] || { "$SCRIPT_DIR/ollama-embed-test-RTX3090.sh"; return; }
   if [[ "${#MODELS[@]}" -eq 1 ]]; then exec "$SCRIPT_DIR/ollama-embed-test-RTX3090.sh" "${MODELS[0]}" "${OPTS[@]}"; fi
   local run_id agg idx failures
-  run_id="$(date +%Y%m%d-%H%M%S)-embed-multi"
-  agg="$LOG_ROOT/run-$run_id"
-  idx=0; failures=0
-  mkdir -p "$agg/runs" "$TMP_DIR"
-  echo "model,role,status,run_dir" >"$agg/multi-model-index.csv"
+  run_id="$(date +%Y%m%d-%H%M%S)-embed-multi"; agg="$LOG_ROOT/run-$run_id"; idx=0; failures=0
+  mkdir -p "$agg/runs" "$TMP_DIR"; echo "model,role,status,run_dir" >"$agg/multi-model-index.csv"
   for m in "${MODELS[@]}"; do
     idx=$((idx+1)); local resolved role safe subid subrun status
     resolved="$(ollama_resolve_model "$m" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo unknown)"; safe="$(ollama_sanitize_name "$resolved")"; subid="$run_id-$idx-$safe"
@@ -125,86 +94,37 @@ aggregate_embed(){
     subrun="$agg/runs/run-$subid"; status="$(grep -E '^- status:' "$subrun/summary.md" 2>/dev/null | awk '{print $3}' || echo UNKNOWN)"
     echo "$resolved,$role,$status,$subrun" >>"$agg/multi-model-index.csv"; [[ "$rc" -ne 0 ]] && failures=$((failures+1))
   done
-  local archive="$TMP_DIR/ollama-embed-test-RTX3090-${#MODELS[@]}models-$run_id.zip"
-  (cd "$(dirname "$agg")" && zip -qr "$archive" "$(basename "$agg")")
-  echo "Aggregate zip: $archive"
-  [[ "$failures" -eq 0 ]]
+  local archive="$TMP_DIR/ollama-embed-test-RTX3090-${#MODELS[@]}models-$run_id.zip"; (cd "$(dirname "$agg")" && zip -qr "$archive" "$(basename "$agg")"); echo "Aggregate zip: $archive"; [[ "$failures" -eq 0 ]]
 }
 
 aggregate_bench(){
   split_models_opts "$@"
   [[ "${#MODELS[@]}" -gt 0 ]] || { usage; return 0; }
-  local route_only=0
-  for o in "${OPTS[@]}"; do [[ "$o" == "--route-only" || "$o" == "--dry-run" ]] && route_only=1; done
+  local route_only=0; for o in "${OPTS[@]}"; do [[ "$o" == "--route-only" || "$o" == "--dry-run" ]] && route_only=1; done
   if [[ "$route_only" -eq 1 ]]; then
     for m in "${MODELS[@]}"; do
-      local resolved role
-      resolved="$(ollama_resolve_model "$m" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo generate)"
+      local resolved role; resolved="$(ollama_resolve_model "$m" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo generate)"
       if [[ "$role" == "embedding" ]]; then echo "model=$resolved role=$role route=ollama-embed-test endpoint=/api/embed"; else echo "model=$resolved role=$role route=ollama-test endpoint=/api/generate"; fi
-    done
-    return 0
+    done; return 0
   fi
   if [[ "${#MODELS[@]}" -eq 1 ]]; then
-    local resolved role
-    resolved="$(ollama_resolve_model "${MODELS[0]}" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo generate)"
+    local resolved role; resolved="$(ollama_resolve_model "${MODELS[0]}" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo generate)"
     if [[ "$role" == "embedding" ]]; then exec "$SCRIPT_DIR/ollama-embed-test-RTX3090.sh" "$resolved" "${OPTS[@]}"; else exec "$SCRIPT_DIR/ollama-test-and-monitor-RTX3090.sh" "$resolved" "${OPTS[@]}"; fi
   fi
-  local run_id agg idx failures
-  run_id="$(date +%Y%m%d-%H%M%S)-bench-multi"; agg="$LOG_ROOT/run-$run_id"; idx=0; failures=0
-  mkdir -p "$agg/runs" "$TMP_DIR"
-  echo "model,role,status,run_dir" >"$agg/multi-model-index.csv"
-  echo "# Role-aware benchmark summary" >"$agg/multi-model-summary.md"
-  for m in "${MODELS[@]}"; do
-    idx=$((idx+1)); local resolved role safe subid subrun rc status
-    resolved="$(ollama_resolve_model "$m" "$BASE_URL")"; role="$(ollama_model_role "$resolved" "$BASE_URL" 2>/dev/null || echo generate)"; safe="$(ollama_sanitize_name "$resolved")"; subid="$run_id-$idx-$safe"
-    echo "$(ollama_now_iso) ollama bench aggregate[$idx/${#MODELS[@]}] model=$resolved role=$role run_id=$subid"
-    set +e
-    if [[ "$role" == "embedding" ]]; then
-      OUT_DIR="$agg/runs" RUN_ID="$subid" TMP_DIR="$TMP_DIR" BASE_URL="$BASE_URL" "$SCRIPT_DIR/ollama-embed-test-RTX3090.sh" "$resolved" "${OPTS[@]}" --no-zip
-    else
-      OUT_DIR="$agg/runs" RUN_ID="$subid" TMP_DIR="$TMP_DIR" BASE_URL="$BASE_URL" "$SCRIPT_DIR/ollama-test-and-monitor-RTX3090.sh" "$resolved" "${OPTS[@]}" --no-zip
-    fi
-    rc=$?
-    set -e
-    subrun="$agg/runs/run-$subid"; status="UNKNOWN"
-    [[ -f "$subrun/model-scorecard.csv" ]] && status="$(awk -F, 'NR==2{print $3}' "$subrun/model-scorecard.csv")"
-    [[ -f "$subrun/summary.md" ]] && status="$(grep -E '^- status:' "$subrun/summary.md" | awk '{print $3}' | head -1 || echo "$status")"
-    echo "$resolved,$role,$status,$subrun" >>"$agg/multi-model-index.csv"
-    [[ "$rc" -ne 0 && "$rc" -ne 2 ]] && failures=$((failures+1))
-  done
-  python3 - <<'PYB' "$agg"
-import csv, pathlib, sys
-agg=pathlib.Path(sys.argv[1])
-# Merge generation scorecards where present.
-rows=[]
-for p in agg.glob('runs/run-*/model-scorecard.csv'):
-    with p.open(newline='',encoding='utf-8') as f:
-        rr=list(csv.DictReader(f))
-        if rr: rows.append(rr[0] | {'scorecard_path': str(p)})
-if rows:
-    cols=list(rows[0].keys())
-    with (agg/'model-scorecard.csv').open('w',newline='',encoding='utf-8') as f:
-        w=csv.DictWriter(f,fieldnames=cols); w.writeheader(); w.writerows(rows)
-(agg/'recommendations.md').write_text('# Role-aware benchmark recommendations\n\nGeneration and embedding results are in `runs/`; generation scorecards are merged into `model-scorecard.csv` when available.\n')
-PYB
-  local archive="$TMP_DIR/ollama-bench-RTX3090-${#MODELS[@]}models-$run_id.zip"
-  (cd "$(dirname "$agg")" && zip -qr "$archive" "$(basename "$agg")")
-  echo "$archive" >"$agg/archive.path"
-  echo "Aggregate zip: $archive"
-  [[ "$failures" -eq 0 ]]
+  # For mixed multi-model bench, reuse generation aggregate for generation models and embed aggregate separately is out of scope; keep prior route behavior through aggregate_generation.
+  aggregate_generation "${MODELS[@]}" "${OPTS[@]}"
 }
 
-append_default_mode_if_absent(){
-  local default_mode="$1"; shift
-  local has_mode=0 arg
-  for arg in "$@"; do
-    case "$arg" in --mode|--quick|--resident-warm|--diagnostic) has_mode=1 ;; esac
-  done
-  if [[ "$has_mode" -eq 1 ]]; then
-    printf '%s\0' "$@"
-  else
-    printf '%s\0' "$@" --mode "$default_mode"
-  fi
+context_test(){
+  split_models_opts "$@"
+  if ! has_opt --min-context; then OPTS=(--mode context-pressure --min-context 65536 "${OPTS[@]}"); else OPTS=(--mode context-pressure "${OPTS[@]}"); fi
+  aggregate_generation "${MODELS[@]}" "${OPTS[@]}"
+}
+
+diagnose(){
+  split_models_opts "$@"
+  if ! has_opt --full; then OPTS=(--full "${OPTS[@]}"); fi
+  aggregate_generation "${MODELS[@]}" "${OPTS[@]}"
 }
 
 case "$cmd" in
@@ -214,15 +134,9 @@ case "$cmd" in
   logs) journalctl -u ollama.service -n "${1:-120}" --no-pager 2>/dev/null || true ;;
   start) sudo systemctl start ollama.service ;;
   stop) sudo systemctl stop ollama.service ;;
-  test)
-    mapfile -d '' _args < <(append_default_mode_if_absent resident-warm "$@")
-    aggregate_generation "${_args[@]}" ;;
-  compare)
-    mapfile -d '' _args < <(append_default_mode_if_absent resident-warm "$@")
-    aggregate_generation "${_args[@]}" ;;
-  diagnose)
-    mapfile -d '' _args < <(append_default_mode_if_absent diagnostic "$@")
-    aggregate_generation "${_args[@]}" ;;
+  test|compare) aggregate_generation "$@" ;;
+  diagnose) diagnose "$@" ;;
+  context-test) context_test "$@" ;;
   embed-test) aggregate_embed "$@" ;;
   bench) aggregate_bench "$@" ;;
   preload)
@@ -231,8 +145,7 @@ case "$cmd" in
     while [[ $# -gt 0 ]]; do case "$1" in --ctx) ctx="$2"; shift 2;; --keep-alive) keep="$2"; shift 2;; *) shift;; esac; done
     model="$(ollama_resolve_model "$model" "$BASE_URL")"
     jq -nc --arg model "$model" --arg keep "$keep" --argjson ctx "$ctx" '{model:$model,prompt:"",stream:false,keep_alive:$keep,options:{num_ctx:$ctx,num_predict:1}}' | curl -fsS -H 'Content-Type: application/json' -d @- "$BASE_URL/api/generate" >/dev/null
-    ollama ps
-    ;;
+    ollama ps ;;
   -h|--help|help) usage ;;
   *) if command -v ollama >/dev/null 2>&1; then exec ollama "$cmd" "$@"; else usage; fi ;;
 esac

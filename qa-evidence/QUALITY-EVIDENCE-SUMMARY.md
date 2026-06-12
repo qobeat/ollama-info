@@ -1,12 +1,5 @@
-# Quality evidence summary v1.11 final
+# Quality evidence summary
 
-The final v1.11 repair targets the last observed serious scoring defect: context-pressure rows with insufficient output were incorrectly accepted as valid context proof and speed evidence.
+v1.12 was implemented from the v1.11 baseline. The release adds production-grade summary tables, `--full`, `--min-context`, `context-test`, context-gated Hermes compatibility, preload/model-ready timing, and use-case-aware aggregate recommendations.
 
-Verification confirms:
-
-- syntax and JSON/JSONL validity;
-- short context rows are classified as inconclusive;
-- impossible one-token speeds are excluded;
-- settings confidence is downgraded when context proof is absent;
-- routine `ollama test` avoids full empty-card runtime by default;
-- full diagnostics remain available through `ollama diagnose`.
+Verification evidence is in `verification-output.txt`, `validator-report.json`, `schema-validation-report.json`, and `evidence-ledger.jsonl`.

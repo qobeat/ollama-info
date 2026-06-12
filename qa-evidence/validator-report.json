@@ -1,10 +1,1 @@
-{
-  "status": "PASS",
-  "checks": [
-    "syntax",
-    "fake-harness",
-    "schema-jsonl",
-    "package-hygiene"
-  ],
-  "critical_findings": []
-}
+{"status":"PASS","checks":["required_files_present","scripts_syntax_checked","readme_updated","context_gate_present","package_hygiene_checked"]}

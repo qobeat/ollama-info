@@ -1,13 +1,9 @@
-# Stress test report v1.11 final
+# Stress test report
 
-Stress condition: context-pressure rows return HTTP 200 but only one generated token.
+Stress cases covered:
 
-Expected behavior:
-
-- row is not valid context proof;
-- visible_tps_avg excludes the row;
-- context_validated remains 0;
-- settings confidence is not HIGH_CONFIRMED;
-- aggregate rankings cannot be inflated by one-token context throughput.
-
-Observed in simulation: PASS.
+1. `--full MODEL` parses without swallowing MODEL as an option value.
+2. `--min-context 65536` reaches summarizer and scorecard.
+3. one-token context output is not a pass.
+4. 65K context pass sets Hermes gate to PASS.
+5. aggregate recommendations separate coding, chat, Hermes main, Hermes fallback, ADOS, and heavy reasoning.

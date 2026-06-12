@@ -1,0 +1,13 @@
+GOAL: Produce a production-grade v1.12 release that fixes confusing summaries, adds --full, validates context windows with --min-context, and treats Hermes 65K context as a hard gate for main chat model selection.
+
+OBJECTIVES:
+1. Add --full to ollama test so all lanes run from one command.
+2. Keep default ollama test fast through resident-warm mode.
+3. Add --min-context and context-test for explicit context validation.
+4. Redesign per-model terminal summaries into tables.
+5. Add aggregate summary tables and use-case-aware winners.
+6. Track preload/model-ready time separately from warm inference.
+7. Prevent context false positives through fill/eval/visible-output gates.
+8. Ensure Hermes main chat cannot be confirmed until 65K context passes.
+9. Update README as production-grade project authority.
+10. Preserve ADOS evidence, schema, package, and compaction discipline.

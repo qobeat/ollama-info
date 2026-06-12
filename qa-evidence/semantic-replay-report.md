@@ -1,12 +1,7 @@
-# Semantic replay report v1.11 final
+# Semantic replay report
 
-Replay: user observes impossible context-pressure speed and asks for the final repair.
+Replay scenario: a model returns HTTP 200 at 65K but emits one token.
+Expected: context verdict is short/inconclusive, Hermes main chat is not confirmed, settings are not HIGH_CONTEXT_CONFIRMED.
 
-Correct behavior after repair:
-
-1. Treat one-token context output as insufficient evidence.
-2. Preserve valid resident-warm speed and capability evidence.
-3. Do not confirm larger context or HIGH_CONFIRMED settings without context evidence.
-4. Prefer fast `ollama test` for daily comparison and explicit `ollama diagnose` for full cold/context diagnostics.
-
-Verdict: PASS.
+Replay scenario: a model passes 65K with prompt fill, eval tokens, and visible output.
+Expected: Hermes main chat can be confirmed and settings can reach HIGH_CONTEXT_CONFIRMED.

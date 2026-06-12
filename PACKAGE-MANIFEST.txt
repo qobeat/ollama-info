@@ -7,10 +7,15 @@ bashrc/.bashrc
 bashrc/README.md
 changelog/CHANGELOG.md
 changelog/REFLECTION-v1.11.md
+changelog/REFLECTION-v1.12.md
 changelog/REVIEW-v1.11.md
+changelog/REVIEW-v1.12.md
 changelog/VERIFY-v1.11.md
+changelog/VERIFY-v1.12.md
 changelog/atomic-requirements-v1.11.txt
+changelog/atomic-requirements-v1.12.txt
 changelog/plan-1.11.txt
+changelog/plan-1.12.txt
 qa-evidence/PACKAGE.json
 qa-evidence/QUALITY-EVIDENCE-SUMMARY.md
 qa-evidence/ados-compliance.md
@@ -25,6 +30,7 @@ qa-evidence/validator-report.json
 qa-evidence/verification-output.txt
 requirements.md
 schema.json
+scripts/ollama-aggregate-summary.py
 scripts/ollama-bench-RTX3090.sh
 scripts/ollama-common.sh
 scripts/ollama-download.sh

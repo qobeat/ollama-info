@@ -3,8 +3,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/ollama-common.sh"
-VERSION="1.11.0-final"
-SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.11-final-context-gates-fast-default"
+VERSION="1.12.0"
+SCRIPT_SIGNATURE="OLLAMA_TEST_AND_MONITOR_RTX3090_SCRIPT_SIGNATURE=v1.12-summary-context-hermes-usecase"
 BASE_URL="${BASE_URL:-${OLLAMA_URL:-http://127.0.0.1:11434}}"
 OUT_DIR="${OUT_DIR:-$HOME/log/ollama-test-and-monitor-RTX3090}"
 TMP_DIR="${TMP_DIR:-$HOME/tmp}"
@@ -66,7 +66,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name,driver_version,temperature.gpu,power.draw,power.limit,memory.used,memory.total,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,pcie.link.width.max --format=csv,noheader,nounits >"$HW_DIR/nvidia-smi-query-end.csv" 2>/dev/null || true
 fi
 # Copy main decision artifacts to top-level for easier review.
-for f in summary.md terminal-summary.txt model-scorecard.csv recommendations.md recommended-ollama-env.conf performance-settings.md performance-settings.sh environment-summary.md runner-log-facts.md capability-analysis.md; do
+for f in summary.md terminal-summary.txt model-scorecard.csv recommendations.md recommended-ollama-env.conf performance-settings.md performance-settings.sh environment-summary.md runner-log-facts.md capability-analysis.md context-summary.csv context-summary.md hermes-compatibility.md; do
   [[ -f "$TEST_DIR/$f" ]] && cp -f "$TEST_DIR/$f" "$RUN_DIR/$f"
 done
 cat >"$RUN_DIR/orchestrator-summary.md" <<EOF_SUM

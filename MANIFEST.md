@@ -7,7 +7,7 @@
 3. `README.md` owns user-facing command behavior and interpretation guidance.
 4. `scripts/` owns executable behavior.
 5. `SOURCE-OF-TRUTH.json` owns governed concept ownership.
-6. `changelog/plan-1.11.txt` owns implementation plan and atomic work mapping.
+6. `changelog/plan-1.12.txt` owns implementation plan and atomic work mapping.
 7. `qa-evidence/evidence-ledger.jsonl` owns observed verification facts.
 
 ## Required runtime surfaces
@@ -20,6 +20,7 @@
 - `scripts/ollama-common.sh`
 - `scripts/ollama-run-generate.py`
 - `scripts/ollama-summarize-results.py`
+- `scripts/ollama-aggregate-summary.py`
 
 ## Required documentation and governance surfaces
 

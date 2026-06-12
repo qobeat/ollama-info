@@ -103,9 +103,8 @@ metrics = {
     'prompt_eval_tps': (prompt_eval_count/prompt_eval_s) if prompt_eval_s > 0 else None,
     'eval_tokens': eval_count,
     'eval_s': eval_s,
-    'decode_tps_raw': (eval_count/eval_s) if eval_s > 0 and eval_count >= 8 else None,
-    # Guard against one-token rows producing impossible rates from tiny eval_duration.
-    'visible_answer_tps': ((eval_count/eval_s) if eval_s > 0 and eval_count >= 8 and response_chars > 0 else None),
+    'decode_tps_raw': (eval_count/eval_s) if eval_s > 0 else None,
+    'visible_answer_tps': ((eval_count/eval_s) if eval_s > 0 and response_chars > 0 else None),
     'load_s': load_s,
     'total_s': total_s,
     'done_reason': last.get('done_reason') or last.get('done') or '',

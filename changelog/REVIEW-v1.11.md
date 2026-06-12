@@ -1,5 +1,16 @@
-# Review v1.11 final
+# Review v1.11
 
-The previous v1.11 run fixed the fatal HTTP 400 issue but exposed a scoring defect: context-pressure rows with `eval=1` were counted as valid and produced impossible visible speeds such as 1,000,000 tok/s. Those rows proved only that the request returned HTTP 200; they did not validate usable context length, throughput, or settings.
+## Source review
 
-This final v1.11 repair gates context-pressure evidence by minimum output and separates context proof from visible throughput/ranking.
+Baseline: user-supplied `ollama-info-v1.10.zip`.
+
+Observed v1.10 failure from supplied test result:
+
+- all six generation model diagnostics returned HTTP 400;
+- raw API error was caused by invalid `think` payload typing;
+- summaries emitted settings and winners despite zero valid generation rows;
+- context recommendations were labeled safe even though context-pressure rows failed.
+
+## Repair decision
+
+v1.11 repairs the tool path rather than changing the benchmark goal. It keeps mode-complete testing and ADOS prompts, but adds typed payload generation, root-error reporting, fail-closed ranking, and settings-confidence gating.

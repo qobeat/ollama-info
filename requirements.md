@@ -1,56 +1,55 @@
 # ollama-info durable requirements
 
-## Project shape
+## Project Shape
 
 | Field | Value |
 |---|---|
-| Project | ollama-info |
-| Artifact family | local AI playground / non-UI diagnostic toolkit |
-| Target host | WSL2/Linux Ollama service with RTX 3090 telemetry |
-| Main delivery | source ZIP containing scripts, README, manifest, schema, and QA evidence |
-| Evidence delivery | quality-evidence ZIP with verification, stress, replay, reflection, and ledger records |
+| Project | `ollama-info` |
+| Package type | RTX 3090 Ollama model evaluation and configuration package |
+| Target host | WSL2/Linux workstation with RTX 3090 and local Ollama |
+| Main delivery | ZIP package with scripts, README, schemas, and QA evidence |
+| Evidence delivery | ZIP package with verification reports and evidence ledger |
 
 ## Goal Figure
 
-`ollama-info` identifies decision-grade local Ollama model choices and safe performance settings for the current hardware, service environment, model set, and intended coding/chat/agentic workloads.
+The package must identify best local Ollama models and safe performance settings for coding, chat, Hermes, ADOS, ADOS code-repair, heavy reasoning, and vision workflows on the current RTX 3090 host.
 
-### Goal surface
+## Goal Surface
 
 A release is inside the goal surface when it:
 
-1. sends valid typed Ollama API payloads;
-2. runs role-aware generation and embedding diagnostics;
-3. measures empty-card, resident-warm, and context-pressure behavior for generation models;
-4. preserves ADOS capability probes for coding, essay, and internet-access boundary behavior;
-5. emits model recommendations only from decision-grade evidence;
-6. emits settings with explicit confidence and avoids unverified “tested/safe” claims;
-7. logs environment, service, model, runner, and GPU facts needed to explain performance;
-8. packages source and QA evidence compactly without runtime debris.
+1. Measures warm model performance without requiring full diagnostic overhead by default.
+2. Runs full diagnostics through `--full`, including empty-card, resident-warm, and context-pressure lanes.
+3. Validates context with explicit gates and supports `--min-context 65536` for Hermes main chat.
+4. Refuses to confirm Hermes main-chat suitability until the 65K context gate passes.
+5. Reports final summaries in clear tables.
+6. Emits applyable WSL2/Ollama settings with explicit confidence levels.
+7. Separates measurement evidence from use-case recommendations.
+8. Preserves compact, traceable QA evidence.
 
 ## Objectives
 
-| ID | Objective | Success indicator |
+| ID | Objective | Success condition |
 |---|---|---|
-| OBJ-01 | Repair request serialization so boolean and string fields preserve Ollama API types. | Payloads use `"think": false`, not `"think": "false"`, when thinking is disabled. |
-| OBJ-02 | Fail closed when generation rows fail. | Runs with no valid generation rows emit `TOOL_FAILURE`, `NO_MODEL_RANKING`, and no best-model recommendation. |
-| OBJ-03 | Gate model rankings on evidence. | Aggregate recommendations use only rows with `ranking_allowed=1`. |
-| OBJ-04 | Gate settings confidence on evidence. | Context increases require passing context-pressure rows; otherwise settings are `LOW_UNCONFIRMED` or baseline only. |
-| OBJ-05 | Surface root errors in terminal and scorecard outputs. | `RootErr` appears in `terminal-summary.txt`, `summary.md`, and `model-scorecard.csv`. |
-| OBJ-06 | Make README an operational authority. | README explains GOAL, objectives, commands, modes, settings confidence, decision-grade gating, and troubleshooting. |
-| OBJ-07 | Preserve ADOS evidence discipline. | QA evidence includes plan, atomic requirements, verification, stress/replay, self-evaluation, reflection, and evidence ledger. |
-| OBJ-08 | Prevent context-pressure false positives and reduce routine runtime. | One-token context rows are inconclusive, excluded from rankings/settings, and routine `ollama test` runs resident-warm unless full `diagnose` is requested. |
+| OBJ-001 | Add `--full` as the all-tests switch. | `ollama test --full MODEL` runs empty-card, resident-warm, and context-pressure lanes. |
+| OBJ-002 | Add `--min-context` as the required context gate. | `--min-context 65536` appears in test plan, context summary, scorecard, and Hermes compatibility output. |
+| OBJ-003 | Redesign terminal summaries as tables. | Per-model terminal output has Execution State, Performance, Capability Rows, Context Window, and Use-Case tables. |
+| OBJ-004 | Validate context windows properly. | Context rows require HTTP 200, prompt fill, eval-token, and response-char gates. |
+| OBJ-005 | Support Hermes main-chat gate. | No model is labeled Hermes main-chat winner unless `Hermes65K=PASS`. |
+| OBJ-006 | Add use-case-aware aggregate recommendations. | Aggregate output separates coding, chat, Hermes main, Hermes fallback, ADOS, ADOS coding repair, vision, and heavy reasoning. |
+| OBJ-007 | Expose preload/model-ready timing. | Scorecards include `preload_wait_s` and `model_ready_s`. |
+| OBJ-008 | Keep settings confidence explicit. | Settings confidence is one of `LOW_UNCONFIRMED`, `MEDIUM_WARM_ONLY`, `MEDIUM_CONTEXT_PARTIAL`, or `HIGH_CONTEXT_CONFIRMED`. |
+| OBJ-009 | Preserve package hygiene. | Release ZIP excludes run folders, nested ZIPs, caches, and generated local debris. |
 
-## Atomic requirements
+## Atomic Requirements
 
-| ID | Requirement | Verification |
+| Req ID | Requirement | Verification |
 |---|---|---|
-| AR-01 | `ollama test` must serialize `think=false` as a JSON boolean. | Fake Ollama harness rejects string false and accepts boolean false; payload inspection passes. |
-| AR-02 | `ollama-run-generate.py` must capture HTTP error body and extracted API error text. | Failure harness emits root error in metrics and terminal summary. |
-| AR-03 | Summaries must classify all-row API failure as `TOOL_FAILURE`. | Failure harness exits nonzero and emits `NO_MODEL_RANKING`. |
-| AR-04 | Single-model recommendations must be suppressed when no valid generation row exists. | Failure harness `recommendations.md` says no best-model recommendation. |
-| AR-05 | Aggregate recommendations must be suppressed when no candidate is decision-grade. | Aggregate ranking code filters by `ranking_allowed=1`. |
-| AR-06 | Settings must declare confidence and avoid unconfirmed context/KV claims. | Scorecard includes `settings_confidence`, `context_validated`, and `kv_cache_type`. |
-| AR-07 | README must document command behavior and interpretation. | README review confirms command and configuration sections. |
-| AR-08 | Package must exclude runtime debris, caches, and nested ZIPs. | Package hygiene check passes. |
-| AR-09 | Context-pressure rows must meet minimum output gates before validating context or speed. | One-token HTTP 200 rows become `SHORT_CONTEXT_SAMPLE` / `CONTEXT_PRESSURE_INCONCLUSIVE`, with `context_validated=0`. |
-| AR-10 | Routine `ollama test` must avoid repeated empty-card first-load cost by default. | `ollama test` runs resident-warm unless `--mode diagnostic` or `ollama diagnose` is used. |
+| REQ-001 | The wrapper must accept `ollama test --full MODEL...` without treating the first model as an option value. | Route-only and fake-harness tests. |
+| REQ-002 | The test engine must accept `--min-context N` and include N in context validation. | Fake context-harness and grep checks. |
+| REQ-003 | Context rows with too few prompt/eval/output tokens must not pass. | One-token/underfilled semantic replay. |
+| REQ-004 | Hermes main-chat recommendation must require `hermes_65k_context=PASS`. | Aggregate scoring replay. |
+| REQ-005 | Terminal summaries must use tables for major sections. | Verification scans `terminal-summary.txt` output. |
+| REQ-006 | Aggregate summary must include use-case winners and Hermes context gate table. | Verification scans aggregate artifacts. |
+| REQ-007 | Settings must stay conservative when context is not validated. | Scorecard and settings evidence. |
+| REQ-008 | README must define project goal, objectives, commands, context rules, settings confidence, and troubleshooting. | Markdown review. |
